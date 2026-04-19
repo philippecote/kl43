@@ -483,7 +483,10 @@ export const STRINGS = {
   },
   warn_uncorrectable: {
     id: "warn_uncorrectable",
-    screen: ["THERE WERE UNCORRECTABLE", "ERRORS PRESS EXIT"],
+    // MANUAL p.53 Appendix B: displayed when the FEC decoder gives up on a
+    // received codeword. "Probable Cause: There were line problems in
+    // receiving the message. Operator Action: Transmitter must resend."
+    screen: ["THERE WERE UNCORRECTABLE", "ERRORS PRESS EXIT."],
     source: M(53, "Appendix B — FEC unrecoverable"),
   },
   warn_plain_tx: {

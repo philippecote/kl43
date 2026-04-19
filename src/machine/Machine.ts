@@ -34,6 +34,7 @@ import { randomBytes } from "../crypto/primitives.js";
 import {
   encryptMessage,
   decryptMessage,
+  UncorrectableError,
   formatForDisplay,
   parseDisplayForm,
 } from "../wire/EncryptedMessage.js";
@@ -185,6 +186,10 @@ export type State =
   | { kind: "D_BEGIN_CONFIRM"; slot: SlotId }
   | { kind: "D_BUSY"; slot: SlotId; remainingMs: number }
   | { kind: "D_FAIL" }  // "MESSAGE DOES NOT DECRYPT PROPERLY" — latch until XIT
+  // MANUAL p.53 Appendix B: RS FEC ran out of correction capacity. Line-noise
+  // diagnosis, not a cipher-layer failure; surfaced separately so the operator
+  // knows the fix is "ask the sender to retransmit" rather than "check the key".
+  | { kind: "D_UNCORRECTABLE"; errorsCorrected: number }
   // Update Key (MANUAL p.16-17)
   | { kind: "U_CONFIRM" }
   | { kind: "U_CONFIRM2" }
@@ -783,6 +788,15 @@ export class Machine {
     if (s.kind === "D_BUSY") return [];
     if (s.kind === "D_FAIL") {
       if (event.kind === "key" && event.key === "XIT") {
+        this._state = { kind: "MAIN_MENU", topIndex: 0 };
+      }
+      return [];
+    }
+    if (s.kind === "D_UNCORRECTABLE") {
+      // Any key acknowledges per Appendix B ("PRESS EXIT"), but we accept
+      // any key press for operator convenience — the warning has already
+      // been read.
+      if (event.kind === "key" || event.kind === "char") {
         this._state = { kind: "MAIN_MENU", topIndex: 0 };
       }
       return [];
@@ -1869,7 +1883,14 @@ export class Machine {
       this.deps.buffers.markDecrypted(slot);
       this._state = { kind: "MAIN_MENU", topIndex: 0 };
       return [{ kind: "decrypted", slot }];
-    } catch {
+    } catch (err) {
+      // Line-noise past the RS capacity is a distinct failure mode from
+      // "cipher doesn't decrypt" (bad key, truncated body, key-set drift).
+      // MANUAL p.53 Appendix B documents both warnings separately.
+      if (err instanceof UncorrectableError) {
+        this._state = { kind: "D_UNCORRECTABLE", errorsCorrected: 0 };
+        return [{ kind: "decryptFailed", slot }];
+      }
       this._state = { kind: "D_FAIL" };
       return [{ kind: "decryptFailed", slot }];
     }

@@ -272,6 +272,9 @@ export function renderScreen(
     case "D_FAIL":
       return STRINGS.warn_decrypt_failed.screen;
 
+    case "D_UNCORRECTABLE":
+      return STRINGS.warn_uncorrectable.screen;
+
     // ───────── Update Key flow ─────────
     case "U_CONFIRM":
       return [

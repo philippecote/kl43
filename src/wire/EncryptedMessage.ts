@@ -1,30 +1,64 @@
 // Transmittable form of a KL-43C ciphertext: the 12-char MI followed by a
-// base32-encoded CBC ciphertext body. The canonical on-display form groups
-// both components into 3-char chunks separated by single spaces
-// (SPEC Appendix A §6.7). On the wire the same grouped form is sent verbatim so hand-copy
-// transcription from voice radio is byte-identical to the source.
+// base32-encoded, Reed-Solomon-protected ciphertext body. The canonical
+// on-display form groups both components into 3-char chunks separated by
+// single spaces (SPEC Appendix A §6.7). On the wire the same grouped form
+// is sent verbatim so hand-copy transcription from voice radio is
+// byte-identical to the source.
 //
-// Framing is intentionally minimal — no length prefix, no version byte.
-// The ciphertext is a PKCS#7-padded CBC stream; its length is implicit in
-// the trailing group. This matches the KL-43C's "type the ciphertext until
-// the operator signals end" model.
+// Layering (MANUAL p.53 Appendix B — "THERE WERE UNCORRECTABLE ERRORS":
+// the real device has a built-in FEC that surfaces this message when the
+// line is too noisy to recover):
+//
+//   plaintext
+//     → CBC/CTR/combiner under the selected CryptoBackend
+//     → ciphertext bytes
+//     → frameOutgoing() prepends a 2-byte length, pads to 223, and runs
+//       Reed-Solomon RS(255,223) per block  →  ~14% parity overhead,
+//       corrects up to 16 symbol errors per 255-byte codeword
+//     → base32 → 3-char groups on the LCD
+//
+// On receive we mirror the stack: base32 decode → RS decode (counting
+// corrected errors + distinguishing "uncorrectable" from "decrypt failed")
+// → cipher decrypt. An `UncorrectableError` from `decryptMessage` means
+// the noise exceeded RS capacity; the Machine surfaces the Appendix B
+// `THERE WERE UNCORRECTABLE / ERRORS PRESS EXIT.` screen. Anything else
+// (MI parse, key-checksum mismatch, PKCS#7 unpad, UTF-8) falls through to
+// the generic `MESSAGE DOES NOT DECRYPT PROPERLY` path.
 
 import { Compartment } from "../state/KeyCompartment.js";
 import { CryptoBackend } from "../crypto/CryptoBackend.js";
 import { MI_TOTAL_LENGTH, makeMi, parseMi } from "../crypto/Mi.js";
-import { base32Decode, base32Encode, groupForDisplay } from "./Base32.js";
+import { base32Encode, groupForDisplay } from "./Base32.js";
 import { filterToBase32 } from "./Base32.js";
+import { frameOutgoing, unframeIncoming, WireFrameError } from "./WireFrame.js";
+import { ReedSolomonError } from "../fec/ReedSolomon.js";
+
+/** Thrown when received ciphertext has more symbol errors than RS can fix. */
+export class UncorrectableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UncorrectableError";
+  }
+}
 
 export interface EncryptedMessage {
   /** The 12-letter MI (A-Z only). */
   readonly mi: string;
-  /** Base32 ciphertext body, no grouping, no padding stripped. */
+  /** Base32 ciphertext body, RS-protected, no grouping. */
   readonly cipherBase32: string;
+}
+
+/** Diagnostic info from a successful decrypt. */
+export interface DecryptResult {
+  readonly plaintext: string;
+  /** Symbol errors the RS decoder silently corrected. 0 = clean line. */
+  readonly errorsCorrected: number;
 }
 
 /**
  * Encrypt a UTF-8 plaintext under the given compartment + backend,
- * returning MI + base32 body. Callers render via `formatForDisplay`.
+ * returning MI + RS-protected base32 body. Callers render via
+ * `formatForDisplay`.
  */
 export function encryptMessage(
   compartment: Compartment,
@@ -36,25 +70,54 @@ export function encryptMessage(
   const stream = backend.init(compartment.currentKey, mi);
   const plainBytes = new TextEncoder().encode(plaintext);
   const cipherBytes = stream.transform(plainBytes, "encrypt");
-  return { mi, cipherBase32: base32Encode(cipherBytes) };
+  const frame = frameOutgoing(mi, cipherBytes);
+  return { mi, cipherBase32: frame.body };
 }
 
 /**
- * Decrypt a received message. Throws on MI parse failure (caller should
- * surface `BAD HEADER — CHECK KEY/UPDATE`), on malformed ciphertext, or on
- * PKCS#7 unpad failure (`Key is Invalid` / `Message Corrupt` are the
- * device's catch-alls).
+ * Decrypt a received message. Throws:
+ *   - `UncorrectableError` when the RS decoder gives up (→ Appendix B
+ *     `THERE WERE UNCORRECTABLE / ERRORS PRESS EXIT.` screen);
+ *   - any other error when MI parse, key-checksum, PKCS#7 unpad, or UTF-8
+ *     fails (→ generic `MESSAGE DOES NOT DECRYPT PROPERLY`).
  */
 export function decryptMessage(
   compartment: Compartment,
   backend: CryptoBackend,
   message: EncryptedMessage,
 ): string {
+  return decryptMessageWithStats(compartment, backend, message).plaintext;
+}
+
+/** Same as `decryptMessage` but returns the RS error-correction count. */
+export function decryptMessageWithStats(
+  compartment: Compartment,
+  backend: CryptoBackend,
+  message: EncryptedMessage,
+): DecryptResult {
   parseMi(message.mi); // explicit validation up-front
+  let cipherBytes: Uint8Array;
+  let errorsCorrected: number;
+  try {
+    const unframed = unframeIncoming({ mi: message.mi, body: message.cipherBase32 });
+    cipherBytes = unframed.ciphertextBytes;
+    errorsCorrected = unframed.errorsCorrected;
+  } catch (err) {
+    if (err instanceof ReedSolomonError) {
+      throw new UncorrectableError(err.message);
+    }
+    // WireFrameError covers non-multiple-of-n length and a length prefix
+    // that overruns the decoded payload — both really are "the line so
+    // mangled we can't even assemble a codeword", which is operationally
+    // the same as uncorrectable. Route there.
+    if (err instanceof WireFrameError) {
+      throw new UncorrectableError(err.message);
+    }
+    throw err;
+  }
   const stream = backend.init(compartment.currentKey, message.mi);
-  const cipherBytes = base32Decode(message.cipherBase32);
   const plainBytes = stream.transform(cipherBytes, "decrypt");
-  return new TextDecoder().decode(plainBytes);
+  return { plaintext: new TextDecoder().decode(plainBytes), errorsCorrected };
 }
 
 /**

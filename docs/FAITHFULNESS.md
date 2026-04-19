@@ -39,7 +39,7 @@ from the real TSEC/KL-43C. Maintained in lockstep with the code.
 | Authentication function | Unknown (but time-bound) | `HMAC-SHA-256(key, challenge ‖ 10-min UTC bucket)`, first 4 base32 chars | MAN p.40 (20-min tolerance) | 🔧 (function) / ✅ (tolerance) |
 | Ciphertext alphabet | A–Z + 2–7 (base32) | Identical | MAN p.12 | ✅ |
 | Ciphertext grouping | 3-char groups, single-space separated | Identical | MAN p.12 | ✅ |
-| FEC code | Unknown (built-in) | Reed-Solomon RS(255, 223) | — | 🔧 |
+| FEC code | Unknown (built-in); surfaces `THERE WERE UNCORRECTABLE / ERRORS PRESS EXIT.` when noise is too bad (MAN p.53) | Reed-Solomon RS(255, 223) over GF(256), corrects up to 16 symbol errors per 255-byte codeword (~14% parity overhead). Wired into encrypt/decrypt: clean transcription rounds-trip verbatim, a handful of character flips are silently corrected, and uncorrectable noise routes to the same Appendix B `D_UNCORRECTABLE` screen. | MAN p.53; `src/wire/WireFrame.ts`, `src/wire/EncryptedMessage.ts`, `src/machine/Machine.ts:performDecrypt` | 🔧 (code picked, wiring real) |
 | Key checksum wrong → message | `Key is Invalid` | Identical | MAN p.8 | ✅ |
 | Malfunction → auto-zeroize all keys | Yes | Yes | MAN p.54 | ✅ |
 

@@ -740,10 +740,12 @@ describe("Encrypt/Decrypt round trip (MANUAL pp.17-20)", () => {
     expect(b.buffers.get("A").origin).toBe("DECRYPTED");
   });
 
-  it("decrypting garbage lands in D_FAIL and emits decryptFailed", () => {
+  it("decrypting a bad MI header lands in D_FAIL (MESSAGE DOES NOT DECRYPT PROPERLY)", () => {
     const b = build();
     toMenuWithKey(b);
-    // Plausible-looking garbage that parses as a 12-letter MI + some base32.
+    // 12 A-Z letters where the trailing 2-letter MI checksum is wrong.
+    // parseMi rejects it before FEC runs, so this is the cipher-layer
+    // failure path, not the line-noise path.
     b.buffers.get("B").buffer.insertString("ABCDEFGHIJKL ZZZ ZZZ ZZZ ZZZ ZZZ ZZZ ZZZ");
     b.m.press({ kind: "char", ch: "D" });
     b.m.press({ kind: "char", ch: "B" });
@@ -752,6 +754,89 @@ describe("Encrypt/Decrypt round trip (MANUAL pp.17-20)", () => {
     const effects = b.m.press({ kind: "tick", elapsedMs: CRYPT_BUSY_MS });
     expect(effects).toContainEqual({ kind: "decryptFailed", slot: "B" });
     expect(b.m.state.kind).toBe("D_FAIL");
+    b.m.press({ kind: "key", key: "XIT" });
+    expect(b.m.state.kind).toBe("MAIN_MENU");
+  });
+
+  it("RS FEC silently corrects a handful of flipped ciphertext characters", () => {
+    const b = build();
+    toMenuWithKey(b);
+    const PLAIN = "THE EAGLE HAS LANDED AT 0100Z. POSITION UNCHANGED. OVER.";
+    b.buffers.get("A").buffer.insertString(PLAIN);
+
+    // Encrypt normally.
+    b.m.press({ kind: "char", ch: "E" });
+    b.m.press({ kind: "char", ch: "A" });
+    b.m.press({ kind: "key", key: "Y" });
+    b.m.press({ kind: "key", key: "Y" });
+    b.m.press({ kind: "tick", elapsedMs: CRYPT_BUSY_MS });
+    const wire = b.buffers.get("A").buffer.toString();
+
+    // Corrupt a handful of base32 characters in the body (past the MI).
+    // RS(255,223) can fix up to 16 symbol errors per 255-byte codeword, and
+    // a single flipped base32 char touches at most two bytes, so 3 flips
+    // ≈ 6 byte errors — comfortably inside capacity.
+    const miEnd = 15; // 12 MI + trailing space + a couple of body chars
+    const flip = (ch: string) => (ch === "A" ? "B" : "A");
+    const chars = wire.split("");
+    const pickOffsets = [miEnd + 1, miEnd + 7, miEnd + 13];
+    for (const off of pickOffsets) {
+      if (/[A-Z2-7]/.test(chars[off]!)) chars[off] = flip(chars[off]!);
+    }
+    const noisy = chars.join("");
+    const bufA = b.buffers.get("A").buffer;
+    bufA.clear();
+    bufA.insertString(noisy);
+
+    // Decrypt — should silently recover despite the flipped bytes.
+    b.m.press({ kind: "char", ch: "D" });
+    b.m.press({ kind: "char", ch: "A" });
+    b.m.press({ kind: "key", key: "Y" });
+    b.m.press({ kind: "key", key: "Y" });
+    const effects = b.m.press({ kind: "tick", elapsedMs: CRYPT_BUSY_MS });
+    expect(effects).toContainEqual({ kind: "decrypted", slot: "A" });
+    expect(b.m.state.kind).toBe("MAIN_MENU");
+    expect(b.buffers.get("A").buffer.toString()).toBe(PLAIN);
+  });
+
+  it("RS FEC surfaces THERE WERE UNCORRECTABLE ERRORS when noise exceeds capacity", () => {
+    const b = build();
+    toMenuWithKey(b);
+    b.buffers.get("A").buffer.insertString("MESSAGE FOR CORRUPTION");
+
+    // Encrypt normally.
+    b.m.press({ kind: "char", ch: "E" });
+    b.m.press({ kind: "char", ch: "A" });
+    b.m.press({ kind: "key", key: "Y" });
+    b.m.press({ kind: "key", key: "Y" });
+    b.m.press({ kind: "tick", elapsedMs: CRYPT_BUSY_MS });
+    const wire = b.buffers.get("A").buffer.toString();
+
+    // Stomp a long run of the body: corrupt >16 bytes (well past RS
+    // capacity) so the decoder gives up rather than silently mis-correcting.
+    // We spray 'A' over bytes 40..120 of the display string, skipping
+    // spaces so we stay inside the base32 body.
+    const chars = wire.split("");
+    for (let i = 40; i < 140 && i < chars.length; i++) {
+      if (/[A-Z2-7]/.test(chars[i]!)) chars[i] = chars[i] === "A" ? "B" : "A";
+    }
+    const noisy = chars.join("");
+    const bufA = b.buffers.get("A").buffer;
+    bufA.clear();
+    bufA.insertString(noisy);
+
+    // Decrypt → must land in D_UNCORRECTABLE, not D_FAIL. Any key returns
+    // to Main Menu per Appendix B "PRESS EXIT".
+    b.m.press({ kind: "char", ch: "D" });
+    b.m.press({ kind: "char", ch: "A" });
+    b.m.press({ kind: "key", key: "Y" });
+    b.m.press({ kind: "key", key: "Y" });
+    const effects = b.m.press({ kind: "tick", elapsedMs: CRYPT_BUSY_MS });
+    expect(effects).toContainEqual({ kind: "decryptFailed", slot: "A" });
+    expect(b.m.state.kind).toBe("D_UNCORRECTABLE");
+    const [row1, row2] = renderScreen(b.m.state, b.store, false, b.buffers);
+    expect(row1).toBe("THERE WERE UNCORRECTABLE");
+    expect(row2).toBe("ERRORS PRESS EXIT.");
     b.m.press({ kind: "key", key: "XIT" });
     expect(b.m.state.kind).toBe("MAIN_MENU");
   });
