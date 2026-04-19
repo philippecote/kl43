@@ -36,9 +36,11 @@ function synthesizeFSK(bytes: Uint8Array, pair: FreqPair, ctx: AudioContext): Au
   const sr = ctx.sampleRate;
   const spb = sr / BAUD;
   const bits: number[] = [];
-  // ~150 ms mark preamble so the receiver can lock before the first start bit.
-  const preBits = Math.ceil(BAUD * 0.15);
-  const postBits = Math.ceil(BAUD * 0.05);
+  // ~400 ms mark preamble so the receiver's ambient-noise EWMA has a chance
+  // to stop tracking upward as soon as the tone arrives, and so an operator
+  // hitting RX slightly late still catches the first data byte.
+  const preBits = Math.ceil(BAUD * 0.4);
+  const postBits = Math.ceil(BAUD * 0.1);
   for (let i = 0; i < preBits; i++) bits.push(1);
   for (const b of bytes) for (const x of byteToFrame(b)) bits.push(x);
   for (let i = 0; i < postBits; i++) bits.push(1);
@@ -87,6 +89,11 @@ export type ReceiverHandle = {
   stop(): void;
   onByte: (cb: (b: number) => void) => void;
 };
+
+// URL flag ?debug=modem dumps per-detection stats (throttled) so we can see
+// what the gate is seeing in real deployments.
+const DEBUG_MODEM =
+  typeof location !== "undefined" && /[?&]debug=modem\b/.test(location.search);
 
 export async function startReceiver(
   pair: FreqPair = BELL103_ORIGINATE,
@@ -164,13 +171,14 @@ export async function startReceiver(
   // this is a floor even in a dead-quiet room so electronic hiss doesn't
   // produce bits. Empirically ~winSize × 1e-5 on a ±1 float PCM signal is
   // well below real carrier and well above a quiet mic.
-  const ABS_ENERGY_FLOOR = winSize * 1e-5;
+  const ABS_ENERGY_FLOOR = winSize * 1e-6;
   // Tone bin must dominate the other by this ratio for a detection to count.
-  // A clean Bell 103 signal gives ratios in the 20–200× range; 2× keeps us
-  // comfortably above noise-driven near-ties.
-  const BIN_RATIO = 2.0;
+  // A clean Bell 103 signal gives ratios in the 20–200× range; 1.6× keeps
+  // us above noise-driven near-ties but is forgiving of real-world acoustic
+  // coupling (room echo, partial mic bandwidth, speaker colouration).
+  const BIN_RATIO = 1.6;
   // Window energy must be this many times the tracked noise floor.
-  const SNR_FACTOR = 6.0;
+  const SNR_FACTOR = 3.0;
 
   type Detection = { bit: 0 | 1; ok: boolean };
   const detectAt = (centerIdx: number): Detection => {
@@ -217,6 +225,29 @@ export async function startReceiver(
 
   let onByteCb: (b: number) => void = () => {};
 
+  // Debug-print throttle: emit at most one line every ~500 ms, and only
+  // when the sample looks non-trivial (either the gate passed, or the
+  // window has audible energy). Keeps the log readable.
+  let lastDebugAt = 0;
+  const debugDump = (tag: string, centerIdx: number) => {
+    if (!DEBUG_MODEM) return;
+    const now = performance.now();
+    if (now - lastDebugAt < 500) return;
+    lastDebugAt = now;
+    const em = goertzelAt(centerIdx, pair.mark);
+    const es = goertzelAt(centerIdx, pair.space);
+    const energy = windowEnergy(centerIdx);
+    const big = Math.max(em, es);
+    const small = Math.max(1e-12, Math.min(em, es));
+    // eslint-disable-next-line no-console
+    console.log(
+      `[kl43/modem ${tag}] em=${em.toExponential(2)} es=${es.toExponential(2)} ` +
+        `ratio=${(big / small).toFixed(1)} winE=${energy.toExponential(2)} ` +
+        `floor=${noiseFloor.toExponential(2)} ` +
+        `snr=${(energy / Math.max(1e-12, noiseFloor)).toFixed(1)}`,
+    );
+  };
+
   proc.onaudioprocess = (e: AudioProcessingEvent) => {
     const input = e.inputBuffer.getChannelData(0);
     for (let i = 0; i < input.length; i++) {
@@ -236,9 +267,11 @@ export async function startReceiver(
         if (!d.ok) {
           const e = windowEnergy(centerIdx);
           noiseFloor = noiseFloor === 0 ? e : noiseFloor * 0.98 + e * 0.02;
+          if (e > ABS_ENERGY_FLOOR) debugDump("idle-noise", centerIdx);
           lastIdle = 1;
           continue;
         }
+        debugDump("idle-carrier", centerIdx);
         if (d.bit === 0 && lastIdle === 1) {
           // Start-bit candidate. Walk back with a narrow window to find the
           // actual mark→space edge (within a few samples), then validate by
