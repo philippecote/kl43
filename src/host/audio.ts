@@ -45,9 +45,10 @@ function getNoiseBuffer(ac: AudioContext): AudioBuffer {
 }
 
 /**
- * One tone with an exponential-decay envelope (attack ~1 ms, exp decay to
- * silence over `durMs`). Exponential decay is what a real RC-damped speaker
- * does when the driver cuts — it's why period beepers sound like a "click"
+ * One tone with an exponential-decay envelope. `attackMs` controls how
+ * sharp the onset is — set to 0 for a true click (instant attack),
+ * ~5 ms for a softer beep. Exponential decay is what a real RC-damped
+ * speaker does when the driver cuts, so it sounds like a period click
  * and not a digital beep.
  */
 function tone(
@@ -57,19 +58,24 @@ function tone(
     gain?: number;
     type?: OscillatorType;
     startAt?: number; // absolute currentTime offset
+    attackMs?: number;
   } = {},
 ): void {
   const ac = getCtx();
   if (!ac) return;
-  const { gain = 0.08, type = "square", startAt = 0 } = opts;
+  const { gain = 0.08, type = "square", startAt = 0, attackMs = 1 } = opts;
   const now = ac.currentTime + startAt;
   const dur = durMs / 1000;
   const osc = ac.createOscillator();
   osc.type = type;
   osc.frequency.setValueAtTime(freq, now);
   const g = ac.createGain();
-  g.gain.setValueAtTime(0, now);
-  g.gain.linearRampToValueAtTime(gain, now + 0.001);
+  if (attackMs <= 0) {
+    g.gain.setValueAtTime(gain, now);
+  } else {
+    g.gain.setValueAtTime(0, now);
+    g.gain.linearRampToValueAtTime(gain, now + attackMs / 1000);
+  }
   // exponentialRampToValueAtTime can't target 0 — use a tiny floor.
   g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
   osc.connect(g).connect(ac.destination);
@@ -104,7 +110,11 @@ function glide(
 }
 
 /** Tiny noise burst — adds "dome collapsing" tactile texture to clicks. */
-function noiseBurst(durMs: number, gain: number): void {
+function noiseBurst(
+  durMs: number,
+  gain: number,
+  opts: { bandHz?: number; Q?: number } = {},
+): void {
   const ac = getCtx();
   if (!ac) return;
   const now = ac.currentTime;
@@ -114,8 +124,8 @@ function noiseBurst(durMs: number, gain: number): void {
   // Band-limit the noise so it sounds like a mechanical click, not hiss.
   const bp = ac.createBiquadFilter();
   bp.type = "bandpass";
-  bp.frequency.value = 1800;
-  bp.Q.value = 0.8;
+  bp.frequency.value = opts.bandHz ?? 1200;
+  bp.Q.value = opts.Q ?? 1.4;
   const g = ac.createGain();
   g.gain.setValueAtTime(gain, now);
   g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
@@ -125,14 +135,17 @@ function noiseBurst(durMs: number, gain: number): void {
 }
 
 /**
- * Key click — 800 Hz square, ~10 ms exp decay, plus a 2 ms filtered noise
- * onset for the "rubber dome" texture. Sits well below the Bell 103 modem
- * band (1070–2225 Hz) so it's unambiguous vs carrier.
+ * Key click — 800 Hz square, instant attack, ~8 ms exponential decay,
+ * plus a short filtered noise onset for the "rubber dome" texture. Kept
+ * deliberately quiet and brief so rapid typing doesn't feel like a
+ * kitchen timer: duration under ~12 ms reads as a click rather than a
+ * beep, and 800 Hz sits below the Bell 103 modem band (1070–2225 Hz) so
+ * it's unambiguous vs carrier.
  */
 export function playKeyClick(silent: boolean): void {
   if (silent) return;
-  tone(800, 10, { gain: 0.06, type: "square" });
-  noiseBurst(2, 0.04);
+  tone(800, 8, { gain: 0.035, type: "square", attackMs: 0 });
+  noiseBurst(1.5, 0.02, { bandHz: 1200, Q: 1.4 });
 }
 
 /** Confirmation tone — single 1 kHz beep, ~150 ms. */
