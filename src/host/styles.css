@@ -77,6 +77,19 @@ body {
   border-color: rgba(255, 255, 255, 0.18);
 }
 
+.dialog-warning {
+  margin: 0 0 14px 0;
+  padding: 10px 12px;
+  background: rgba(200, 60, 40, 0.12);
+  border: 1px solid rgba(200, 60, 40, 0.45);
+  border-left: 3px solid rgba(220, 80, 60, 0.9);
+  color: #f4d7d2;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.dialog-warning strong { color: #ffb6ac; }
+
 .topbar-github {
   display: inline-flex;
   align-items: center;

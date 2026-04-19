@@ -7,10 +7,18 @@
 //
 //   - lfsr-nlc  — SAVILLE-shaped LFSR nonlinear combiner (default, most
 //                 architecturally faithful: stream cipher, irregular
-//                 clocking, Geffe-style combiner)
-//   - aes-ctr   — AES-128-CTR, operationally equivalent, cryptographically
-//                 strong, useful for interop / sanity-check
-//   - des-cbc   — DES-56-CBC, historical XMP-500 export mode
+//                 clocking, Geffe-style combiner). Toy cipher.
+//   - aes-ctr   — AES-128-CTR. The primitive is strong, but CTR alone gives
+//                 confidentiality only — there is no message authentication,
+//                 so a tampered ciphertext decrypts to modified plaintext
+//                 silently. Faithful to the real KL-43 (which also had no
+//                 per-message MAC) but NOT a "secure channel" in the modern
+//                 AEAD sense.
+//   - des-cbc   — DES-56-CBC, historical XMP-500 export mode. Broken since
+//                 the 1990s; for period flavour only.
+//
+// None of these backends is appropriate for protecting real information.
+// This project is a historical re-creation, not a secrets tool.
 //
 // Interface shape (addendum A.2): `init(kRaw, mi) → CryptoStream`, and the
 // stream does a single whole-buffer `transform(input, mode)` per message.

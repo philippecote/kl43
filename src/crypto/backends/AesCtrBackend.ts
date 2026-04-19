@@ -54,9 +54,9 @@ class AesCtrStream implements CryptoStream {
 
 export class AesCtrBackend implements CryptoBackend {
   readonly id = "aes-ctr" as const;
-  readonly label = "AES-128 CTR (secure)";
+  readonly label = "AES-128 CTR";
   readonly description =
-    "AES-128 in counter mode — cryptographically strong. Use when secrecy matters.";
+    "AES-128 in counter mode. The cipher itself is strong, but this mode has no integrity check — a tampered ciphertext decrypts to modified plaintext without warning. For fun and education only, not for real secrets.";
 
   init(kRaw: Uint8Array, mi: string): CryptoStream {
     return new AesCtrStream(kRaw, mi);

@@ -60,7 +60,7 @@ export class DesCbcBackend implements CryptoBackend {
   readonly id = "des-cbc" as const;
   readonly label = "DES-56 CBC (XMP-500 mode)";
   readonly description =
-    "Historical 56-bit DES — matches the Datotek XMP-500 export variant. EXPORT MODE — NOT SECURE.";
+    "Historical 56-bit DES — matches the Datotek XMP-500 export variant. Known to be breakable since the 1990s; included for period authenticity only. Do not use for anything that matters.";
 
   init(kRaw: Uint8Array, mi: string): CryptoStream {
     return new DesCbcStream(kRaw, mi);

@@ -140,7 +140,7 @@ export class LfsrNlcBackend implements CryptoBackend {
   readonly id = "lfsr-nlc" as const;
   readonly label = "SAVILLE-shaped (default)";
   readonly description =
-    "127-bit nonlinear LFSR combiner — architecturally closest to the real device. Toy cipher, not secure.";
+    "127-bit nonlinear LFSR combiner — architecturally closest to the real device's classified algorithm. Toy cipher; not secure against any serious attacker. Chosen for historical feel only.";
 
   init(kRaw: Uint8Array, mi: string): CryptoStream {
     return new LfsrNlcStream(kRaw, mi);

@@ -34,6 +34,14 @@
           emulator lets you pick a substitute. Both stations must select the
           same backend, key, and update level to round-trip a message.
         </p>
+        <p class="dialog-warning">
+          <strong>For fun and historical re-creation only.</strong> None of
+          these backends is appropriate for protecting real information.
+          Even the AES option has no message authentication — a tampered
+          ciphertext decrypts to modified plaintext without warning, just
+          like on the real KL-43. Do not use this software to protect
+          anything that matters.
+        </p>
         <form id="cipher-form" class="cipher-form"></form>
         <p id="cipher-status" class="keygen-status"></p>
       </div>
@@ -64,6 +72,11 @@
           <button id="keygen-close" type="button" aria-label="Close">×</button>
         </div>
         <p class="keygen-help">Random 32-letter key (30 body letters + 2-letter checksum). Use it at the Key Change prompt.</p>
+        <p class="dialog-warning">
+          <strong>Not a real secure key.</strong> This emulator uses toy
+          and educational ciphers — generated keys are for playing with
+          the KL-43 experience, not for protecting anything that matters.
+        </p>
         <div id="keygen-key" class="keygen-key" tabindex="0"></div>
         <p id="keygen-status" class="keygen-status"></p>
         <div class="keygen-actions">
