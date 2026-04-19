@@ -4,6 +4,10 @@ A faithful functional and visual emulator of the **TSEC/KL-43C** secure text ter
 
 This is a historical re-creation built for educational and entertainment purposes. It reproduces the look, keypad, menus, displays, FSK modem behaviour, and operational procedures of the original device.
 
+### Live demo
+
+Try it in your browser: **<https://philippecote.github.io/kl43/>**
+
 ---
 
 ## Disclaimer
