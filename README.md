@@ -5,11 +5,48 @@ terminal — the portable "AutoManual System" text-encryption device built by
 TRW EPI Inc. and used by US and allied forces from the mid-1980s through its
 official retirement in **May 2013**.
 
-The emulator reproduces the look, keypad, menus, displays, Bell 103 FSK
-modem behaviour, and operational procedures of the original device. It is a
-historical re-creation for educational and entertainment purposes.
+## Try it now
 
-**Live demo:** <https://philippecote.github.io/kl43/>
+### ▶ Live demo: <https://philippecote.github.io/kl43/>
+
+Open the demo on **two phones, two laptops, or one of each** — anything with
+a browser, a speaker, and a microphone. Pick the same key and cipher backend
+on both devices, compose on one, point its speaker at the other's mic, press
+`Comms → Audio → Acoustic → Transmit` on the sender and
+`Comms → Audio → Acoustic → Receive` on the listener, and watch your
+encrypted text cross the room as **300 baud Bell 103 FSK tones** — the
+same acoustic-coupler protocol the real KL-43C used to talk through 1980s
+telephone handsets.
+
+This is not a simulation of a modem. It **is** a modem. The chirps coming
+out of your speaker are the exact mark/space tone pairs the original
+device emitted (1270/1070 Hz on the originating side, 2225/2025 Hz on the
+answering side). You can record them, mail the audio file to a friend,
+hold one phone next to another phone on a call, or pipe them through
+anything that preserves a ~1 kHz bandwidth audio path — they will still
+decode on the other end. The receiver demodulates with a software
+Goertzel filter, feeds the bytes through the cipher and Reed–Solomon
+error correction, and drops the plaintext into its message buffer, just
+like the operator at the far end of a Cold War radio patch would have
+seen. Latency, tones, group framing, and `ZZZZ` end-of-message sentinel
+are all period-accurate.
+
+## A note on faithfulness
+
+I have never seen or held a real KL-43C. Everything in this project is
+reconstructed from public sources: the 1991 TRW operator's manual, a 1994
+Dutch Royal Army instruction card, the TRW feature-comparison sheet, and
+the photographs on [Crypto Museum](https://www.cryptomuseum.com/crypto/usa/kl43/).
+Every screen prompt, every menu flow, every tone pair, every timeout has
+been cross-referenced against those documents and marked `[SUBSTITUTE]`
+in code and docs wherever the manual is silent. `docs/FAITHFULNESS.md` is
+an honest tally of what's accurate, what's approximate, and what's
+guessed.
+
+If you have used a real KL-43, or have better photographs, firmware
+dumps, training films, or any other primary material, please
+[open an issue](https://github.com/philippecote/kl43/issues) — I would
+love to bring this closer to the metal.
 
 ---
 
@@ -55,17 +92,25 @@ Status:
 
 ## Features
 
-- Full 2 × 40 LCD, 59-key rubber-dome keypad, and rendered device plate.
+- Full 2 × 40 LCD, 59-key rubber-dome keypad, and rendered device plate
+  (built over a Crypto Museum reference photograph).
 - Boot self-test, main menu, message composition, review, encrypt / decrypt,
-  key management, authentication mode, clock, and zeroize flows.
+  key management, time-bucketed authentication, clock, and zeroize flows —
+  all traced to specific pages of the TRW operator's manual.
 - Dual message slots (A, B) with classification header per MANUAL p.12.
+- Verbal phonetic readout (MANUAL Appendix C) for reading cipher groups
+  aloud over a voice channel — press `SRCH` inside Review.
+- Mock TP-40S printed scroll for the P menu, with torn thermal-paper edge.
 - Three pluggable crypto backends behind a single `CryptoBackend` interface,
-  runtime-selectable from the app menu.
-- Bell 103 FSK modem (300 baud) over WebAudio for over-the-air acoustic
-  coupling between two browsers, with a live-tunable receiver gate.
-- Reed–Solomon FEC on the ciphertext stream.
-- 329+ unit tests covering cipher primitives, framing, state machine, UART,
-  and two-station round-trip integration.
+  runtime-selectable from the app menu: **LFSR-NLC** (SAVILLE-shaped),
+  **AES-128-CTR**, and **DES-56-CBC** (XMP-500 compatibility feel).
+- **Bell 103 FSK modem** (300 baud, full Goertzel demodulator) over
+  WebAudio for real over-the-air acoustic coupling between two browsers,
+  with a live-tunable receiver gate exposed in the Modem menu.
+- Reed–Solomon FEC on the ciphertext stream, base32 (`A–Z + 2–7`) group
+  framing, `ZZZZ` end-of-message sentinel.
+- 331+ unit tests covering cipher primitives, framing, state machine,
+  UART, and two-station round-trip integration.
 
 ---
 
@@ -91,13 +136,25 @@ npm run build      # typecheck + vite build into dist/
 
 ### Two-station setup
 
-Open the demo URL in two browser windows (or on two devices). On each, set
-up the same key and cipher backend (`Cipher` menu), compose on one, select
-`Comms → Acoustic → Transmit`, and on the other `Comms → Acoustic →
-Receive`. Acoustic coupling between phone speaker and laptop microphone
-works; for clean loopback on one machine, route audio via
+Open the [live demo](https://philippecote.github.io/kl43/) in two browser
+windows or on two devices. On each, set the **same cipher backend**
+(`Cipher` menu) and load the **same key** (use the `Key Generator` menu
+to mint one and `Type into device`). Compose a message on station A with
+`W → A`, encrypt with `E → A → Y`, then:
+
+- Sender: `Comms → Audio Data → Acoustic Coupler → Transmit → U.S. Lines`,
+  select slot `A`, press `ENTER` to begin. Hold its speaker near the
+  receiver's mic.
+- Receiver: `Comms → Audio Data → Acoustic Coupler → Receive`. The LCD
+  flips from *Waiting for Carrier* to *Receiving Message* the moment the
+  first byte lands.
+- After carrier loss, the receiver decrypts (`D → A → Y`) and shows the
+  plaintext on `R → A`.
+
+For silent single-machine loopback, route audio via
 [BlackHole](https://existential.audio/blackhole/) or similar. The **Modem**
-menu exposes live sensitivity sliders if reception is marginal.
+menu exposes live sensitivity sliders if ambient noise is defeating
+acquisition.
 
 ---
 
