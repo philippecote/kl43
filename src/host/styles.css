@@ -77,6 +77,20 @@ body {
   border-color: rgba(255, 255, 255, 0.18);
 }
 
+.topbar-github {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.topbar-github svg { display: block; }
+
+@media (max-width: 640px) {
+  /* On narrow screens the row is crowded; collapse the label and keep the
+   * icon, which is still recognizable as a GitHub link. */
+  .topbar-github-text { display: none; }
+  .topbar-github { padding: 6px 8px; }
+}
+
 /* Key Generator dialog — modal overlay with the generated key as selectable
  * text so the user can copy manually if the Clipboard API is blocked. */
 .keygen-dialog {
