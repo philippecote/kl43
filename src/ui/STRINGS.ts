@@ -428,6 +428,18 @@ export const STRINGS = {
     source: M(46, "Printing a Message"),
   },
 
+  // ───────────────────────────────────── Review — verbal readout ─────────────────────────────────────
+  verbal_empty: {
+    id: "verbal_empty",
+    screen: ["Message is empty", ""],
+    source: S(
+      "SUBSTITUTE",
+      undefined,
+      undefined,
+      "Manual Appendix C (p.55) documents the phonetic alphabet but gives no screen for the readout itself. The emulator surfaces it via SRCH inside Review — wording is a SUBSTITUTE.",
+    ),
+  },
+
   // ───────────────────────────────────── Appendix B warnings ─────────────────────────────────────
   warn_cipher_in_buffer: {
     id: "warn_cipher_in_buffer",

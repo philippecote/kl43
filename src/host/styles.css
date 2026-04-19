@@ -391,3 +391,94 @@ body.calibrate .lcd {
 body.calibrate #calibration-hud {
   display: block;
 }
+
+/* ─────────────────────── Printed-scroll overlay ───────────────────────
+ * Cosmetic rendering of the TP-40S output. Not a real printer; just the
+ * same text the operator composed, styled as faux thermal-paper so the
+ * P-menu has visible feedback. MANUAL pp.45–46. */
+.printed-scroll-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 40px 16px;
+  overflow-y: auto;
+}
+.printed-scroll-overlay[hidden] { display: none; }
+
+.printed-scroll {
+  position: relative;
+  width: min(520px, 92vw);
+  max-height: calc(100vh - 80px);
+  display: flex;
+  flex-direction: column;
+}
+
+.printed-close {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: #222;
+  color: #eee;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+  z-index: 1;
+}
+.printed-close:hover { background: #333; }
+
+.printed-paper {
+  background: #f5efe0;
+  color: #2a2418;
+  font-family: "Courier New", ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  padding: 28px 24px 36px;
+  border-radius: 2px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  /* Torn/perforated bottom edge */
+  clip-path: polygon(
+    0 0, 100% 0, 100% 100%,
+    96% 98%, 92% 100%, 88% 98%, 84% 100%, 80% 98%, 76% 100%,
+    72% 98%, 68% 100%, 64% 98%, 60% 100%, 56% 98%, 52% 100%,
+    48% 98%, 44% 100%, 40% 98%, 36% 100%, 32% 98%, 28% 100%,
+    24% 98%, 20% 100%, 16% 98%, 12% 100%, 8% 98%, 4% 100%, 0 98%
+  );
+}
+
+.printed-header {
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  border-bottom: 1px dashed #8a7f68;
+  padding-bottom: 8px;
+  margin-bottom: 16px;
+  color: #4a3f28;
+  word-break: break-all;
+}
+
+.printed-body {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 13px;
+  color: inherit;
+}
+
+.printed-footer {
+  margin-top: 20px;
+  padding-top: 8px;
+  border-top: 1px dashed #8a7f68;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: #6a5e3f;
+  text-align: center;
+}

@@ -12,6 +12,7 @@ import { paintLcd } from "./lcd.js";
 import { buildKeypad, enableCalibration, keyEventFor } from "./keypad.js";
 import { playKeyClick, playConfirm, playError, playPowerOff, playPowerOn, playZeroize, unlockAudio } from "./audio.js";
 import { buildTopbar } from "./topbar.js";
+import { showPrintedScroll } from "./printer.js";
 import {
   transmitText,
   startReceiver,
@@ -104,6 +105,11 @@ async function startListeningForRx(): Promise<void> {
       console.log(`[kl43] RX byte: 0x${b.toString(16).padStart(2, "0")} (${ch})`);
       if (b >= 0x20 && b < 0x7f) rxBuffer += String.fromCharCode(b);
       else if (b === 0x0a || b === 0x0d) rxBuffer += "\n";
+      // Flip the LCD from "Waiting for Carrier…" to "Receiving Message" on
+      // the very first demodulated byte, instead of only after end-of-
+      // carrier. rxCarrierDetected() is idempotent and safe to call per byte.
+      machine.rxCarrierDetected();
+      render();
       if (rxSilenceTimer) clearTimeout(rxSilenceTimer);
       rxSilenceTimer = setTimeout(() => {
         if (machine.state.kind === "C_RX_WAIT" && rxBuffer.length > 0) {
@@ -185,6 +191,11 @@ function handleEffects(effects: readonly Effect[]): void {
         try { localStorage.setItem(SILENT_STORAGE, e.silent ? "1" : "0"); }
         catch (err) { console.warn("[kl43] persist silent failed:", err); }
         break;
+      case "printed": {
+        const buf = deps.buffers.get(e.slot);
+        showPrintedScroll(e.slot, buf.buffer.toString());
+        break;
+      }
       case "txTransmitted":
         if (e.mode === "AUDIO") {
           transmitText(e.wire, BELL103_ORIGINATE).catch((err) => {

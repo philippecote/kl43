@@ -7,8 +7,14 @@ import { KeyCompartmentStore, formatSlotLine } from "../state/KeyCompartment.js"
 import type { DualBuffer } from "../editor/DualBuffer.js";
 import type { Clock } from "../state/Clock.js";
 import { formatClockLines } from "../state/Clock.js";
-import { MAIN_MENU_ITEMS, STRINGS, type LcdScreen } from "../ui/STRINGS.js";
-import { BAUD_RATES, type State } from "./Machine.js";
+import {
+  MAIN_MENU_ITEMS,
+  PHONETIC_DIGIT,
+  PHONETIC_LETTER,
+  STRINGS,
+  type LcdScreen,
+} from "../ui/STRINGS.js";
+import { BAUD_RATES, tokenizeForVerbal, type State } from "./Machine.js";
 
 const LCD_COLS = 40;
 
@@ -30,6 +36,22 @@ function padTwoCol(left: string, right: string, width = LCD_COLS): string {
  * chars. Manual p.5/8 depicts "NN - NAME-UU" but that's manual typesetting —
  * a 2-row × 2-col grid + "^ or v" indicator only fits at 16 chars/slot.
  */
+/**
+ * Render a cipher/word token as its phonetic spelling, using MANUAL Appendix C
+ * (p.55). Unknown characters pass through verbatim so operators can still
+ * distinguish punctuation if it ever appears.
+ */
+function spellPhonetic(token: string): string {
+  const parts: string[] = [];
+  for (const raw of token) {
+    const ch = raw.toUpperCase();
+    if (PHONETIC_LETTER[ch]) parts.push(PHONETIC_LETTER[ch]!);
+    else if (PHONETIC_DIGIT[ch]) parts.push(PHONETIC_DIGIT[ch]!);
+    else parts.push(ch);
+  }
+  return parts.join(" ");
+}
+
 function formatCompactSlot(id: number, c: Compartment | null): string {
   const nn = id.toString().padStart(2, "0");
   if (!c) return `${nn}-AVAILABLE-00`;
@@ -345,6 +367,20 @@ export function renderScreen(
 
     case "R_VIEWER": {
       if (!buffers) return [""];
+      if (state.phonetic) {
+        // MANUAL Appendix C / SPEC_DELTA §1.1: verbal-fallback readout. Show
+        // the current cipher/word group on the top row with position counter,
+        // and its phonetic spelling on the bottom row.
+        const tokens = tokenizeForVerbal(buffers.get(state.slot).buffer.toString());
+        if (tokens.length === 0) {
+          return [STRINGS.verbal_empty.screen[0] ?? "", ""];
+        }
+        const idx = Math.min(state.tokenIndex, tokens.length - 1);
+        const token = tokens[idx] ?? "";
+        const header = padTwoCol(`${idx + 1}/${tokens.length}`, token);
+        const phon = spellPhonetic(token);
+        return [header, phon.slice(0, LCD_COLS)];
+      }
       const { lines } = buffers.get(state.slot).buffer.layout();
       const row1 = (lines[state.topRow] ?? "").replace(/\n$/, "");
       const row2 = (lines[state.topRow + 1] ?? "").replace(/\n$/, "");
@@ -419,6 +455,12 @@ export function renderScreen(
       return STRINGS.comms_tx_complete.screen;
 
     case "C_RX_WAIT":
+      // Once the host signals carrier lock / first byte we flip to the
+      // "Receiving Message" screen while bytes are still streaming in, so
+      // the operator sees the same "Receiving" screen the real device
+      // showed during the actual receive (MANUAL p.32) — not just for the
+      // post-carrier dwell.
+      if (state.active) return STRINGS.comms_receiving.screen;
       return state.mode === "AUDIO"
         ? STRINGS.comms_waiting_carrier.screen
         : STRINGS.comms_waiting_data.screen;

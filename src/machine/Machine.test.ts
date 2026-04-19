@@ -1064,13 +1064,35 @@ describe("Review Message (MANUAL p.14-15)", () => {
     b.m.press({ kind: "char", ch: "R" });
     expect(b.m.state.kind).toBe("R_SELECT_SLOT");
     b.m.press({ kind: "char", ch: "A" });
-    expect(b.m.state).toEqual({ kind: "R_VIEWER", slot: "A", topRow: 0 });
+    expect(b.m.state).toEqual({
+      kind: "R_VIEWER", slot: "A", topRow: 0, phonetic: false, tokenIndex: 0,
+    });
     b.m.press({ kind: "key", key: "DOWN" });
-    expect(b.m.state).toEqual({ kind: "R_VIEWER", slot: "A", topRow: 1 });
+    expect((b.m.state as { topRow: number }).topRow).toBe(1);
     b.m.press({ kind: "key", key: "UP" });
-    expect(b.m.state).toEqual({ kind: "R_VIEWER", slot: "A", topRow: 0 });
+    expect((b.m.state as { topRow: number }).topRow).toBe(0);
     b.m.press({ kind: "key", key: "XIT" });
     expect(b.m.state.kind).toBe("MAIN_MENU");
+  });
+
+  // SPEC_DELTA §1.1 "Verbal fallback" + MANUAL Appendix C.
+  it("SRCH in R_VIEWER toggles phonetic readout; UP/DOWN page tokens", () => {
+    const b = build();
+    b.buffers.get("A").buffer.insertString("4AB NFC QWP");
+    powerOn(b.m); b.m.press({ kind: "key", key: "ENTER" });
+    b.m.press({ kind: "char", ch: "R" });
+    b.m.press({ kind: "char", ch: "A" });
+    b.m.press({ kind: "key", key: "SRCH_ON" });
+    expect(b.m.state).toEqual({
+      kind: "R_VIEWER", slot: "A", topRow: 0, phonetic: true, tokenIndex: 0,
+    });
+    b.m.press({ kind: "key", key: "DOWN" });
+    expect((b.m.state as { tokenIndex: number }).tokenIndex).toBe(1);
+    b.m.press({ kind: "key", key: "DOWN" });
+    b.m.press({ kind: "key", key: "DOWN" });
+    expect((b.m.state as { tokenIndex: number }).tokenIndex).toBe(2);
+    b.m.press({ kind: "key", key: "SRCH_ON" });
+    expect((b.m.state as { phonetic: boolean }).phonetic).toBe(false);
   });
 });
 
@@ -1247,7 +1269,7 @@ describe("Communications (MANUAL p.22-40)", () => {
     b.m.press({ kind: "char", ch: "A" });
     expect(b.m.state).toEqual({ kind: "C_ACOUSTIC_LINES", dir: "RX" });
     b.m.press({ kind: "char", ch: "E" });
-    expect(b.m.state).toEqual({ kind: "C_RX_WAIT", mode: "AUDIO", slot: "A" });
+    expect(b.m.state).toEqual({ kind: "C_RX_WAIT", mode: "AUDIO", slot: "A", active: false });
   });
 
   it("audio RX: connector skips the lines prompt", () => {
@@ -1257,7 +1279,7 @@ describe("Communications (MANUAL p.22-40)", () => {
     b.m.press({ kind: "char", ch: "A" });
     b.m.press({ kind: "char", ch: "R" });
     b.m.press({ kind: "char", ch: "C" });
-    expect(b.m.state).toEqual({ kind: "C_RX_WAIT", mode: "AUDIO", slot: "A" });
+    expect(b.m.state).toEqual({ kind: "C_RX_WAIT", mode: "AUDIO", slot: "A", active: false });
   });
 
   it("XIT from C_AUDIO_SUBMODE returns to C_DIR_SELECT; XIT from C_ACOUSTIC_LINES returns to submode", () => {
@@ -1424,7 +1446,13 @@ describe("Communications (MANUAL p.22-40)", () => {
     // MANUAL p.37: digital RX routes through the baud-rate selector.
     expect(b.m.state).toEqual({ kind: "C_RX_BAUD_SELECT", baudIndex: 5 });
     b.m.press({ kind: "key", key: "ENTER" });
-    expect(b.m.state).toEqual({ kind: "C_RX_WAIT", mode: "DIGITAL", slot: "A" });
+    expect(b.m.state).toEqual({ kind: "C_RX_WAIT", mode: "DIGITAL", slot: "A", active: false });
+    // Host signals first byte → screen flips to "Receiving Message".
+    b.m.rxCarrierDetected();
+    expect(b.m.state).toEqual({ kind: "C_RX_WAIT", mode: "DIGITAL", slot: "A", active: true });
+    // Second call is idempotent.
+    b.m.rxCarrierDetected();
+    expect((b.m.state as { active: boolean }).active).toBe(true);
     b.m.feedReceived("RECEIVED MESSAGE");
     expect(b.m.state.kind).toBe("C_RX_BUSY");
     expect(b.buffers.get("A").buffer.toString()).toBe("RECEIVED MESSAGE");

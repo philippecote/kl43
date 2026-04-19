@@ -97,6 +97,16 @@ export const CLOCK_FIELDS = [
   { name: "SECOND", width: 2, min: 0, max: 59 },
 ] as const;
 
+/**
+ * Split buffer content into tokens for the R_VIEWER verbal-readout overlay.
+ * Each run of non-whitespace becomes one token; for operators this matches
+ * the base32 cipher-group layout (`4AB NFC QWP …`, MANUAL p.12) and also
+ * works sanely for plaintext (one word per screen).
+ */
+export function tokenizeForVerbal(text: string): string[] {
+  return text.split(/\s+/).filter((t) => t.length > 0);
+}
+
 /** Seed CLOCK_EDIT with the current clock's fields so operators only need to
  *  overtype the components they want to change. */
 export function clockSeed(utcMs: number): string[] {
@@ -198,7 +208,12 @@ export type State =
   | { kind: "K_CONFIRM"; slotId: number }
   // Review Message (MANUAL p.14-15)
   | { kind: "R_SELECT_SLOT" }
-  | { kind: "R_VIEWER"; slot: SlotId; topRow: number }
+  // `phonetic` toggles the verbal-readout overlay used when the operator has
+  // to relay a ciphertext message over a voice channel. When true, navigation
+  // is by whitespace-separated token (cipher groups in black mode) rather
+  // than by row; the token index is kept in `tokenIndex`. MANUAL Appendix C
+  // (p.55) + SPEC_DELTA §1.1 "Verbal fallback".
+  | { kind: "R_VIEWER"; slot: SlotId; topRow: number; phonetic: boolean; tokenIndex: number }
   // View Angle (MANUAL p.47)
   | { kind: "V_ADJUST"; level: number }
   // Print (MANUAL p.45-46)
@@ -225,7 +240,11 @@ export type State =
   | { kind: "C_TX_READY"; slot: SlotId; mode: "AUDIO" | "DIGITAL" }
   | { kind: "C_TX_BUSY"; slot: SlotId; mode: "AUDIO" | "DIGITAL"; remainingMs: number }
   | { kind: "C_TX_COMPLETE"; slot: SlotId; mode: "AUDIO" | "DIGITAL" }
-  | { kind: "C_RX_WAIT"; mode: "AUDIO" | "DIGITAL"; slot: SlotId }
+  // `active` flips true as soon as the host demodulator detects carrier /
+  // receives its first byte, so the LCD can show "Receiving Message" while
+  // data is actually flowing in rather than only for the post-carrier dwell.
+  // Until then the LCD shows the manual's "Waiting for …" prompt.
+  | { kind: "C_RX_WAIT"; mode: "AUDIO" | "DIGITAL"; slot: SlotId; active: boolean }
   | { kind: "C_RX_BUSY"; slot: SlotId; mode: "AUDIO" | "DIGITAL"; remainingMs: number }
   | { kind: "C_RX_COMPLETE"; slot: SlotId; mode: "AUDIO" | "DIGITAL" }
   | { kind: "STUB"; letter: MenuLetter; label: string }; // unimplemented menu dispatch
@@ -1029,7 +1048,13 @@ export class Machine {
       if (event.kind === "char") {
         const ch = event.ch.toUpperCase();
         if (ch === "A" || ch === "B") {
-          this._state = { kind: "R_VIEWER", slot: ch as SlotId, topRow: 0 };
+          this._state = {
+            kind: "R_VIEWER",
+            slot: ch as SlotId,
+            topRow: 0,
+            phonetic: false,
+            tokenIndex: 0,
+          };
         }
       }
       return [];
@@ -1039,14 +1064,42 @@ export class Machine {
         this._state = { kind: "MAIN_MENU", topIndex: 0 };
         return [];
       }
+      // SPEC_DELTA §1.1 "Verbal fallback": SRCH toggles the phonetic overlay
+      // so the operator can read the (usually cipher) message aloud. This is
+      // a deliberate emulator affordance — MANUAL p.21 says only ^/v are
+      // functional in Review, but without a softkey there is nowhere else to
+      // surface the phonetic table.
+      if (event.kind === "key" && event.key === "SRCH_ON") {
+        this._state = {
+          kind: "R_VIEWER",
+          slot: s.slot,
+          topRow: s.topRow,
+          phonetic: !s.phonetic,
+          tokenIndex: 0,
+        };
+        return [];
+      }
+      if (s.phonetic) {
+        const tokens = tokenizeForVerbal(this.deps.buffers.get(s.slot).buffer.toString());
+        const last = Math.max(0, tokens.length - 1);
+        if (event.kind === "key" && event.key === "UP") {
+          this._state = { ...s, tokenIndex: Math.max(0, s.tokenIndex - 1) };
+          return [];
+        }
+        if (event.kind === "key" && event.key === "DOWN") {
+          this._state = { ...s, tokenIndex: Math.min(last, s.tokenIndex + 1) };
+          return [];
+        }
+        return [];
+      }
       if (event.kind === "key" && event.key === "UP") {
-        this._state = { kind: "R_VIEWER", slot: s.slot, topRow: Math.max(0, s.topRow - 1) };
+        this._state = { ...s, topRow: Math.max(0, s.topRow - 1) };
         return [];
       }
       if (event.kind === "key" && event.key === "DOWN") {
         const { lines } = this.deps.buffers.get(s.slot).buffer.layout();
         const lastTop = Math.max(0, lines.length - 2);
-        this._state = { kind: "R_VIEWER", slot: s.slot, topRow: Math.min(lastTop, s.topRow + 1) };
+        this._state = { ...s, topRow: Math.min(lastTop, s.topRow + 1) };
         return [];
       }
       return [];
@@ -1182,7 +1235,7 @@ export class Machine {
           // may be used regardless of operation mode.
           this._state = s.dir === "TX"
             ? { kind: "C_TX_SLOT_SELECT", mode: "AUDIO" }
-            : { kind: "C_RX_WAIT", mode: "AUDIO", slot: "A" };
+            : { kind: "C_RX_WAIT", mode: "AUDIO", slot: "A", active: false };
         }
       }
       return [];
@@ -1206,7 +1259,7 @@ export class Machine {
           // it has no downstream effect in this emulator.
           this._state = s.dir === "TX"
             ? { kind: "C_TX_SLOT_SELECT", mode: "AUDIO" }
-            : { kind: "C_RX_WAIT", mode: "AUDIO", slot: "A" };
+            : { kind: "C_RX_WAIT", mode: "AUDIO", slot: "A", active: false };
         }
       }
       return [];
@@ -1286,7 +1339,7 @@ export class Machine {
         return [];
       }
       if (event.kind === "key" && event.key === "ENTER") {
-        this._state = { kind: "C_RX_WAIT", mode: "DIGITAL", slot: "A" };
+        this._state = { kind: "C_RX_WAIT", mode: "DIGITAL", slot: "A", active: false };
       }
       return [];
     }
@@ -1650,6 +1703,18 @@ export class Machine {
    * `rxReceived` after the dwell. Callers in production plumb this from the
    * modem layer; tests use it directly.
    */
+  /**
+   * Signal from the host that the modem has locked onto a carrier / seen
+   * its first inbound byte. Flips C_RX_WAIT.active true so the LCD swaps
+   * from "Waiting for Carrier…" to "Receiving Message" while bytes are
+   * still streaming in. Idempotent and a no-op outside C_RX_WAIT.
+   */
+  rxCarrierDetected(): void {
+    if (this._state.kind !== "C_RX_WAIT") return;
+    if (this._state.active) return;
+    this._state = { ...this._state, active: true };
+  }
+
   feedReceived(text: string, slot?: SlotId): void {
     if (this._state.kind !== "C_RX_WAIT") {
       throw new Error(`feedReceived requires C_RX_WAIT, got ${this._state.kind}`);
