@@ -1,0 +1,129 @@
+{
+  "_meta": {
+    "device": "TSEC/KL-43C",
+    "source": {
+      "primary": "full_crypto_museum.jpg (Crypto Museum photograph)",
+      "secondary": "reference/KL43C_manual_F_19910815.pdf Appendix F (p.67)"
+    },
+    "notes": [
+      "Layout traced from front-on Crypto Museum photograph. Positions are logical (row/col grid), not pixel-exact. Pixel-perfect placement is deferred to Phase 4 rendering (see SPEC_DELTA §4.3).",
+      "Manual Appendix F states 'Standard QWERTY plus 15 special function keys with no shifted functions.' Our count: 26 alpha + 10 digit + 8 punctuation/space + 15 special = 59 keys. Matches spec total despite spec row-5 layout being fabricated.",
+      "Key id is the canonical name used in code; legend is the glyph rendered on the cap. Unicode arrows (↑ ↓ ← →) are used as legends; code names are UP/DOWN/LEFT/RIGHT.",
+      "ENTER is a tall key spanning rows 2 and 3 on the right edge (rowSpan: 2).",
+      "SRCH doubles as the power-ON key when unit is off — there is no separate power switch (MANUAL p.8: 'The unit is turned on by pressing the SRCH key')."
+    ],
+    "rowCount": 5,
+    "keyCount": 59,
+    "categories": {
+      "alpha": "A-Z letter keys",
+      "digit": "0-9 number keys",
+      "punct": "visible punctuation and space",
+      "nav": "cursor movement and buffer navigation",
+      "edit": "delete and structural editing",
+      "special": "top-level function keys: ZRO, XIT, CLK, SRCH, ENTER"
+    }
+  },
+
+  "rows": [
+    {
+      "row": 0,
+      "label": "edit/nav",
+      "description": "Top row of small dark keys above the letter rows. Cursor control, buffer navigation, delete, search."
+    },
+    {
+      "row": 1,
+      "label": "digits",
+      "description": "Number row."
+    },
+    {
+      "row": 2,
+      "label": "qwerty",
+      "description": "Top letter row."
+    },
+    {
+      "row": 3,
+      "label": "asdf",
+      "description": "Middle letter row. Bracketed by ZRO (left) and XIT (right); ENTER extends from row 2 into this row."
+    },
+    {
+      "row": 4,
+      "label": "zxcv",
+      "description": "Bottom letter row. Bracketed by CLK (left) and SPC (right)."
+    }
+  ],
+
+  "keys": [
+    { "id": "BOT",   "legend": "BOT",   "row": 0, "col": 0,  "category": "nav",     "semantics": "Jump to beginning of text (buffer top).", "source": "CM_PHOTO+MAN_p13" },
+    { "id": "EOT",   "legend": "EOT",   "row": 0, "col": 1,  "category": "nav",     "semantics": "Jump to end of text.",                     "source": "CM_PHOTO+MAN_p13" },
+    { "id": "DOWN",  "legend": "↓",     "row": 0, "col": 2,  "category": "nav",     "semantics": "Cursor down one line.",                    "source": "CM_PHOTO+MAN_p13" },
+    { "id": "UP",    "legend": "↑",     "row": 0, "col": 3,  "category": "nav",     "semantics": "Cursor up one line.",                      "source": "CM_PHOTO+MAN_p13" },
+    { "id": "LEFT",  "legend": "←",     "row": 0, "col": 4,  "category": "nav",     "semantics": "Cursor left one character.",               "source": "CM_PHOTO+MAN_p13" },
+    { "id": "RIGHT", "legend": "→",     "row": 0, "col": 5,  "category": "nav",     "semantics": "Cursor right one character.",              "source": "CM_PHOTO+MAN_p13" },
+    { "id": "BOL",   "legend": "BOL",   "row": 0, "col": 6,  "category": "nav",     "semantics": "Beginning of line.",                       "source": "CM_PHOTO+MAN_p13" },
+    { "id": "EOL",   "legend": "EOL",   "row": 0, "col": 7,  "category": "nav",     "semantics": "End of line.",                             "source": "CM_PHOTO+MAN_p13" },
+    { "id": "DCH",   "legend": "D CH",  "row": 0, "col": 8,  "category": "edit",    "semantics": "Delete character to the left of the cursor.", "source": "CM_PHOTO+MAN_p13" },
+    { "id": "DWD",   "legend": "D WD",  "row": 0, "col": 9,  "category": "edit",    "semantics": "Delete word to the right of the cursor.",  "source": "CM_PHOTO+MAN_p13" },
+    { "id": "SRCH",  "legend": "SRCH",  "row": 0, "col": 10, "category": "special", "semantics": "At Main Menu: string search prompt. When unit is off: power ON.", "source": "CM_PHOTO+MAN_p8+p14" },
+
+    { "id": "D1",    "legend": "1",     "row": 1, "col": 0,  "category": "digit", "source": "CM_PHOTO" },
+    { "id": "D2",    "legend": "2",     "row": 1, "col": 1,  "category": "digit", "source": "CM_PHOTO" },
+    { "id": "D3",    "legend": "3",     "row": 1, "col": 2,  "category": "digit", "source": "CM_PHOTO" },
+    { "id": "D4",    "legend": "4",     "row": 1, "col": 3,  "category": "digit", "source": "CM_PHOTO" },
+    { "id": "D5",    "legend": "5",     "row": 1, "col": 4,  "category": "digit", "source": "CM_PHOTO" },
+    { "id": "D6",    "legend": "6",     "row": 1, "col": 5,  "category": "digit", "source": "CM_PHOTO" },
+    { "id": "D7",    "legend": "7",     "row": 1, "col": 6,  "category": "digit", "source": "CM_PHOTO" },
+    { "id": "D8",    "legend": "8",     "row": 1, "col": 7,  "category": "digit", "source": "CM_PHOTO" },
+    { "id": "D9",    "legend": "9",     "row": 1, "col": 8,  "category": "digit", "source": "CM_PHOTO" },
+    { "id": "D0",    "legend": "0",     "row": 1, "col": 9,  "category": "digit", "source": "CM_PHOTO" },
+    { "id": "LPAR",  "legend": "(",     "row": 1, "col": 10, "category": "punct", "source": "CM_PHOTO" },
+    { "id": "RPAR",  "legend": ")",     "row": 1, "col": 11, "category": "punct", "source": "CM_PHOTO" },
+
+    { "id": "Q",     "legend": "Q",     "row": 2, "col": 0,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "W",     "legend": "W",     "row": 2, "col": 1,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "E",     "legend": "E",     "row": 2, "col": 2,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "R",     "legend": "R",     "row": 2, "col": 3,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "T",     "legend": "T",     "row": 2, "col": 4,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "Y",     "legend": "Y",     "row": 2, "col": 5,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "U",     "legend": "U",     "row": 2, "col": 6,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "I",     "legend": "I",     "row": 2, "col": 7,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "O",     "legend": "O",     "row": 2, "col": 8,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "P",     "legend": "P",     "row": 2, "col": 9,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "DASH",  "legend": "-",     "row": 2, "col": 10, "category": "punct", "source": "CM_PHOTO" },
+    { "id": "ENTER", "legend": "ENTER", "row": 2, "col": 11, "rowSpan": 2, "category": "special", "semantics": "Confirm/commit. In editor: creates new paragraph (carriage return), not a soft line break.", "source": "CM_PHOTO+MAN_p13" },
+
+    { "id": "ZRO",   "legend": "ZRO",   "row": 3, "col": 0,  "category": "special", "semantics": "Held at power-on: emergency zeroize of all crypto material. Confirms via 'PRESS ENTER TO ZEROIZE'.", "source": "CM_PHOTO+MAN_p43" },
+    { "id": "A",     "legend": "A",     "row": 3, "col": 1,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "S",     "legend": "S",     "row": 3, "col": 2,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "D",     "legend": "D",     "row": 3, "col": 3,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "F",     "legend": "F",     "row": 3, "col": 4,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "G",     "legend": "G",     "row": 3, "col": 5,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "H",     "legend": "H",     "row": 3, "col": 6,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "J",     "legend": "J",     "row": 3, "col": 7,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "K",     "legend": "K",     "row": 3, "col": 8,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "L",     "legend": "L",     "row": 3, "col": 9,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "SLASH", "legend": "/",     "row": 3, "col": 10, "category": "punct", "source": "CM_PHOTO" },
+    { "id": "XIT",   "legend": "XIT",   "row": 3, "col": 11, "category": "special", "semantics": "Exit current state / back up one prompt level. Cancel.", "source": "CM_PHOTO+MAN_p9" },
+
+    { "id": "CLK",   "legend": "CLK",   "row": 4, "col": 0,  "category": "special", "semantics": "Display time and date. Disabled during Encrypting/Decrypting/Transmit/Receive.", "source": "CM_PHOTO+MAN_p15" },
+    { "id": "Z",     "legend": "Z",     "row": 4, "col": 1,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "X",     "legend": "X",     "row": 4, "col": 2,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "C",     "legend": "C",     "row": 4, "col": 3,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "V",     "legend": "V",     "row": 4, "col": 4,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "B",     "legend": "B",     "row": 4, "col": 5,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "N",     "legend": "N",     "row": 4, "col": 6,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "M",     "legend": "M",     "row": 4, "col": 7,  "category": "alpha", "source": "CM_PHOTO" },
+    { "id": "COMMA", "legend": ",",     "row": 4, "col": 8,  "category": "punct", "source": "CM_PHOTO" },
+    { "id": "DOT",   "legend": ".",     "row": 4, "col": 9,  "category": "punct", "source": "CM_PHOTO" },
+    { "id": "QUEST", "legend": "?",     "row": 4, "col": 10, "category": "punct", "source": "CM_PHOTO" },
+    { "id": "SPC",   "legend": "SPC",   "row": 4, "col": 11, "category": "special", "semantics": "In editor: inserts a space to the left of the cursor.", "source": "CM_PHOTO+MAN_p13" }
+  ],
+
+  "disabledBy": {
+    "encrypting":  ["CLK", "SRCH"],
+    "decrypting":  ["CLK", "SRCH"],
+    "transmit":    ["CLK"],
+    "receive":     ["CLK"],
+    "review":      ["ALL_EXCEPT:UP,DOWN,XIT"],
+    "boot_confirm": ["ALL_EXCEPT:ENTER,XIT"]
+  }
+}

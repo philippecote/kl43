@@ -1,0 +1,297 @@
+/* Photo-overlay styling for the TSEC/KL-43C emulator.
+ *
+ * The device background is a photograph of the real unit (public/device.png,
+ * 1280×853 from the Crypto Museum). All interactive elements — the LCD
+ * character cells and the 59 key hotspots — are positioned absolutely over
+ * their real on-device locations using percentage coordinates so the layout
+ * scales with the container. Hotspots are transparent to preserve the photo. */
+
+:root {
+  --device-aspect: 1280 / 853;
+  --lcd-pixel: #1c2213;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #111;
+  color: #ddd;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  min-height: 100vh;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 24px 24px;
+}
+
+/* App-level top bar — not part of the emulated hardware. Hosts the title and
+ * menu items like Key Generator, Manual, Faithfulness notes. */
+.topbar {
+  width: 100%;
+  max-width: 1100px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 4px;
+  gap: 16px;
+}
+
+.topbar-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #d6d6d0;
+}
+
+.topbar-menu {
+  display: flex;
+  gap: 6px;
+}
+
+.topbar-menu button,
+.topbar-menu a {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #d6d6d0;
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.topbar-menu button:hover,
+.topbar-menu a:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+/* Key Generator dialog — modal overlay with the generated key as selectable
+ * text so the user can copy manually if the Clipboard API is blocked. */
+.keygen-dialog {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  padding: 24px;
+}
+
+.keygen-dialog.show {
+  display: flex;
+}
+
+.keygen-panel {
+  background: #1a1c18;
+  color: #eaeaea;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 20px 22px;
+  max-width: 540px;
+  width: 100%;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
+}
+
+.keygen-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.keygen-header h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+#keygen-close {
+  background: transparent;
+  border: none;
+  color: #aaa;
+  font-size: 22px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+}
+
+#keygen-close:hover { color: #fff; }
+
+.keygen-help {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #b0b0a8;
+}
+
+.keygen-key {
+  font: 600 17px ui-monospace, monospace;
+  letter-spacing: 0.04em;
+  background: #0f110d;
+  color: #e8e8dc;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 14px 16px;
+  user-select: all;
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.keygen-status {
+  margin: 10px 0 0;
+  min-height: 1.2em;
+  font-size: 12px;
+  color: #9a9a8e;
+}
+
+.keygen-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.keygen-actions button {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #eaeaea;
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.keygen-actions button:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.device {
+  position: relative;
+  width: min(1100px, 100%);
+  aspect-ratio: var(--device-aspect);
+  background-image: url(/device.png);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.6);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Hide brand label — it's already baked into the photo. */
+.brand {
+  display: none;
+}
+
+/* LCD — absolutely positioned over the photo's display window.
+ * These percentages are approximate; adjust after calibration. */
+.lcd {
+  position: absolute;
+  top: 25.35%;
+  left: 15.0%;
+  width: 69.3%;
+  height: 8.7%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+#lcd-canvas {
+  display: block;
+  width: 96%;
+  height: auto;
+  max-height: 100%;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* Off-state: hide lit dots. */
+.device.off #lcd-canvas {
+  visibility: hidden;
+}
+
+/* Keypad container spans the whole device; each key is positioned absolutely
+ * via its own inline style from hotspot coordinates. */
+.keypad {
+  position: absolute;
+  inset: 0;
+}
+
+.key {
+  position: absolute;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  user-select: none;
+  border-radius: 4px;
+  transition: background 60ms ease, box-shadow 60ms ease;
+}
+
+.key:focus-visible {
+  outline: 2px solid rgba(255, 255, 80, 0.6);
+  outline-offset: -2px;
+}
+
+.key:active,
+.key.pressed {
+  background: rgba(255, 255, 150, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 150, 0.4);
+}
+
+.key[data-disabled="true"] {
+  cursor: not-allowed;
+}
+
+/* Calibration overlay — shown only when body.calibrate is set. Renders a
+ * crosshair-follow label and visible hotspot outlines so we can measure key
+ * positions against the photograph. */
+body.calibrate .key {
+  background: rgba(255, 0, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 0, 255, 0.55);
+  cursor: move;
+}
+
+body.calibrate .key.selected {
+  background: rgba(255, 255, 0, 0.25);
+  box-shadow: inset 0 0 0 2px rgba(255, 220, 0, 0.95);
+  z-index: 10;
+}
+
+body.calibrate .lcd {
+  outline: 1px dashed cyan;
+}
+
+#calibration-hud {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.85);
+  color: #0f0;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  z-index: 9999;
+  display: none;
+  max-width: 520px;
+}
+
+#calibration-hud b { color: #ff0; }
+
+body.calibrate #calibration-hud {
+  display: block;
+}
