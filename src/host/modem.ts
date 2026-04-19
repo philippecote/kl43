@@ -173,12 +173,18 @@ export async function startReceiver(
   // well below real carrier and well above a quiet mic.
   const ABS_ENERGY_FLOOR = winSize * 1e-6;
   // Tone bin must dominate the other by this ratio for a detection to count.
-  // A clean Bell 103 signal gives ratios in the 20–200× range; 1.6× keeps
+  // A clean Bell 103 signal gives ratios in the 20–200× range; 1.35× keeps
   // us above noise-driven near-ties but is forgiving of real-world acoustic
   // coupling (room echo, partial mic bandwidth, speaker colouration).
-  const BIN_RATIO = 1.6;
-  // Window energy must be this many times the tracked noise floor.
-  const SNR_FACTOR = 3.0;
+  const BIN_RATIO = 1.35;
+  // If the winning bin dominates the other by at least this much, we treat
+  // it as a confident detection even when total energy is only modestly
+  // above the noise floor. This helps pick up quiet-but-clean tones from
+  // device-to-device acoustic coupling.
+  const STRONG_BIN_RATIO = 4.0;
+  // Window energy must be this many times the tracked noise floor (unless
+  // STRONG_BIN_RATIO trips).
+  const SNR_FACTOR = 1.8;
 
   type Detection = { bit: 0 | 1; ok: boolean };
   const detectAt = (centerIdx: number): Detection => {
@@ -188,9 +194,13 @@ export async function startReceiver(
     const big = em > es ? em : es;
     const small = em > es ? es : em;
     const bit: 0 | 1 = em > es ? 1 : 0;
-    const strong = energy > ABS_ENERGY_FLOOR && energy > noiseFloor * SNR_FACTOR;
+    if (energy <= ABS_ENERGY_FLOOR) return { bit, ok: false };
+    const strong = energy > noiseFloor * SNR_FACTOR;
     const dominant = big > small * BIN_RATIO;
-    return { bit, ok: strong && dominant };
+    const veryDominant = big > small * STRONG_BIN_RATIO;
+    // Accept if: (energy above SNR floor AND bins separable) OR
+    // (tone is clearly one frequency even without much SNR headroom).
+    return { bit, ok: (strong && dominant) || veryDominant };
   };
 
   // Narrow-window detect: a short window centred tightly, used for finding
@@ -244,7 +254,9 @@ export async function startReceiver(
     const ratio = big / small;
     const snr = energy / Math.max(1e-12, noiseFloor);
     const wouldPass =
-      energy > ABS_ENERGY_FLOOR && energy > noiseFloor * SNR_FACTOR && ratio > BIN_RATIO;
+      energy > ABS_ENERGY_FLOOR &&
+      ((energy > noiseFloor * SNR_FACTOR && ratio > BIN_RATIO) ||
+        ratio > STRONG_BIN_RATIO);
     // eslint-disable-next-line no-console
     console.log(
       `[kl43/modem] cb=${cbCount} peak=${cbPeak.toFixed(3)} ` +
