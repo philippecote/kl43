@@ -36,10 +36,14 @@ export type ModemConfig = {
   preambleMs: number;
 };
 
+// Defaults tuned from real iPhone-speaker → MacBook-mic coupling in a
+// typical (not silent) living room. Acquisition is very permissive; the
+// UART framing + start-bit mid-point validation do most of the work of
+// rejecting ambient noise in practice.
 export const MODEM_DEFAULTS: ModemConfig = {
-  binRatio: 1.35,
-  strongBinRatio: 4.0,
-  snrFactor: 1.8,
+  binRatio: 1.05,
+  strongBinRatio: 3.0,
+  snrFactor: 1.1,
   absEnergyScale: 1e-6,
   preambleMs: 400,
 };
