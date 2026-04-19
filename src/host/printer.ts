@@ -2,7 +2,7 @@
 // printer output. MANUAL pp.45–46 describes the real printing path; the
 // emulator does not drive a printer but surfaces the same text on a faux
 // thermal-paper scroll so the operator gets the same "I just printed this"
-// feedback loop. SPEC_DELTA §1.1 "Print function" + FAITHFULNESS §5.
+// feedback loop. SPEC Appendix A §1.1 "Print function" + FAITHFULNESS §5.
 //
 // The scroll is a single DOM overlay, lazily created on first print. It is
 // dismissed by click, Escape, or the close button. The scroll is cosmetic —

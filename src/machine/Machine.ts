@@ -212,7 +212,7 @@ export type State =
   // to relay a ciphertext message over a voice channel. When true, navigation
   // is by whitespace-separated token (cipher groups in black mode) rather
   // than by row; the token index is kept in `tokenIndex`. MANUAL Appendix C
-  // (p.55) + SPEC_DELTA §1.1 "Verbal fallback".
+  // (p.55) + SPEC Appendix A §1.1 "Verbal fallback".
   | { kind: "R_VIEWER"; slot: SlotId; topRow: number; phonetic: boolean; tokenIndex: number }
   // View Angle (MANUAL p.47)
   | { kind: "V_ADJUST"; level: number }
@@ -233,6 +233,9 @@ export type State =
   | { kind: "C_ACOUSTIC_LINES"; dir: "TX" | "RX" }
   // Silent Mode denies acoustic-coupler comms (MANUAL p.39; Appendix B p.53).
   | { kind: "C_AUDIO_DENIED" }
+  // MANUAL p.52: locally-entered ciphertext cannot be transmitted; display
+  // the Appendix B warning until the operator acknowledges with any key.
+  | { kind: "C_LOCAL_CIPHER_DENIED" }
   | { kind: "C_TX_SLOT_SELECT"; mode: "AUDIO" | "DIGITAL" }
   | { kind: "C_TX_BAUD_SELECT"; slot: SlotId; baudIndex: number }  // DIGITAL TX, MANUAL p.29
   | { kind: "C_TX_PLEASE_WAIT"; slot: SlotId; baudIndex: number; remainingMs: number }
@@ -1064,7 +1067,7 @@ export class Machine {
         this._state = { kind: "MAIN_MENU", topIndex: 0 };
         return [];
       }
-      // SPEC_DELTA §1.1 "Verbal fallback": SRCH toggles the phonetic overlay
+      // SPEC Appendix A §1.1 "Verbal fallback": SRCH toggles the phonetic overlay
       // so the operator can read the (usually cipher) message aloud. This is
       // a deliberate emulator affordance — MANUAL p.21 says only ^/v are
       // functional in Review, but without a softkey there is nowhere else to
@@ -1247,6 +1250,12 @@ export class Machine {
       }
       return [];
     }
+    if (s.kind === "C_LOCAL_CIPHER_DENIED") {
+      if (event.kind === "key" || event.kind === "char") {
+        this._state = { kind: "MAIN_MENU", topIndex: 0 };
+      }
+      return [];
+    }
     if (s.kind === "C_ACOUSTIC_LINES") {
       if (event.kind === "key" && event.key === "XIT") {
         this._state = { kind: "C_AUDIO_SUBMODE", dir: s.dir };
@@ -1277,9 +1286,10 @@ export class Machine {
           try {
             this.deps.buffers.assertTransmittable(slot);
           } catch {
-            // For now we just reject silently and return to menu. A later
-            // pass can surface warn_local_cipher.
-            this._state = { kind: "MAIN_MENU", topIndex: 0 };
+            // MANUAL p.52 / Appendix B p.53: surface warn_local_cipher so the
+            // operator knows the slot holds locally-entered ciphertext and
+            // cannot be transmitted. Any key returns to the main menu.
+            this._state = { kind: "C_LOCAL_CIPHER_DENIED" };
             return [];
           }
           // DIGITAL TX inserts baud-select + Please Wait per MANUAL p.28-29.
@@ -1580,7 +1590,7 @@ export class Machine {
       if (event.kind === "char") {
         const ch = s.mode === "CIPHER"
           // Cipher-text entry accepts only base32 (A-Z + 2-7); everything
-          // else is silently ignored (SPEC_DELTA §6.7, §4.5).
+          // else is silently ignored (SPEC Appendix A §6.7, §4.5).
           ? (/^[A-Za-z2-7]$/.test(event.ch) ? event.ch.toUpperCase() : null)
           // Plain text accepts any printable char as-is; device is
           // uppercase-only per MANUAL p.12 note.

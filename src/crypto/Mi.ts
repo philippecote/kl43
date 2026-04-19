@@ -15,7 +15,7 @@
 //
 // The MI is transmitted aloud over voice radio and so stays in the A-Z
 // phonetic-friendly alphabet; the ciphertext body that follows uses the
-// larger base32 alphabet (see SPEC_DELTA §6.7).
+// larger base32 alphabet (see SPEC Appendix A §6.7).
 
 import { sha256 } from "./primitives.js";
 

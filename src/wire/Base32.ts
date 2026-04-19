@@ -2,7 +2,7 @@
 // Alphabet: A-Z + 2-7 (32 symbols, digits 0/1 excluded to avoid O/0 and
 // I/1/L confusion when operators read ciphertext aloud).
 //
-// Per SPEC_DELTA §6.7: ciphertext is grouped into 3-char groups separated
+// Per SPEC Appendix A §6.7: ciphertext is grouped into 3-char groups separated
 // by single spaces, both on display and over the wire. The device's editor
 // auto-inserts group spaces; only A-Z and 2-7 are accepted in cipher-text
 // entry mode (all other characters are silently ignored).

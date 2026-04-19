@@ -6,7 +6,7 @@
       "secondary": "reference/KL43C_manual_F_19910815.pdf Appendix F (p.67)"
     },
     "notes": [
-      "Layout traced from front-on Crypto Museum photograph. Positions are logical (row/col grid), not pixel-exact. Pixel-perfect placement is deferred to Phase 4 rendering (see SPEC_DELTA §4.3).",
+      "Layout traced from front-on Crypto Museum photograph. Positions are logical (row/col grid), not pixel-exact. Pixel-perfect placement is deferred to Phase 4 rendering (see SPEC Appendix A §4.3).",
       "Manual Appendix F states 'Standard QWERTY plus 15 special function keys with no shifted functions.' Our count: 26 alpha + 10 digit + 8 punctuation/space + 15 special = 59 keys. Matches spec total despite spec row-5 layout being fabricated.",
       "Key id is the canonical name used in code; legend is the glyph rendered on the cap. Unicode arrows (↑ ↓ ← →) are used as legends; code names are UP/DOWN/LEFT/RIGHT.",
       "ENTER is a tall key spanning rows 2 and 3 on the right edge (rowSpan: 2).",

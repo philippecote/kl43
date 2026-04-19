@@ -1075,7 +1075,28 @@ describe("Review Message (MANUAL p.14-15)", () => {
     expect(b.m.state.kind).toBe("MAIN_MENU");
   });
 
-  // SPEC_DELTA §1.1 "Verbal fallback" + MANUAL Appendix C.
+  it("Review renders the classification as the first row (MANUAL p.12)", () => {
+    const b = build();
+    // Simulate the classification round-trip: operator picks P mode, types
+    // "SECRET", ENTER, then body. The state machine prepends the header.
+    powerOn(b.m); b.m.press({ kind: "key", key: "ENTER" });
+    b.m.press({ kind: "char", ch: "W" });
+    b.m.press({ kind: "char", ch: "A" });
+    b.m.press({ kind: "tick", elapsedMs: 2000 });
+    b.m.press({ kind: "char", ch: "P" });
+    for (const ch of "SECRET") b.m.press({ kind: "char", ch });
+    b.m.press({ kind: "key", key: "ENTER" });
+    for (const ch of "HELLO") b.m.press({ kind: "char", ch });
+    b.m.press({ kind: "key", key: "XIT" }); // store + return to menu
+    b.m.press({ kind: "tick", elapsedMs: 5000 });
+    b.m.press({ kind: "char", ch: "R" });
+    b.m.press({ kind: "char", ch: "A" });
+    const [row1, row2] = renderScreen(b.m.state, b.store, false, b.buffers);
+    expect(row1).toBe("SECRET");
+    expect(row2).toBe("HELLO");
+  });
+
+  // SPEC Appendix A §1.1 "Verbal fallback" + MANUAL Appendix C.
   it("SRCH in R_VIEWER toggles phonetic readout; UP/DOWN page tokens", () => {
     const b = build();
     b.buffers.get("A").buffer.insertString("4AB NFC QWP");
@@ -1214,7 +1235,10 @@ describe("Communications (MANUAL p.22-40)", () => {
     b.m.press({ kind: "char", ch: "T" });
     b.m.press({ kind: "char", ch: "C" }); // connector-audio skips the lines prompt
     b.m.press({ kind: "char", ch: "A" });
-    // Rejected silently → returns to Main Menu without C_TX_READY.
+    // Rejection surfaces the warn_local_cipher screen (Appendix B p.53).
+    expect(b.m.state).toEqual({ kind: "C_LOCAL_CIPHER_DENIED" });
+    // Any key acknowledges the warning and returns to Main Menu.
+    b.m.press({ kind: "key", key: "ENTER" });
     expect(b.m.state.kind).toBe("MAIN_MENU");
   });
 
@@ -1307,6 +1331,18 @@ describe("Communications (MANUAL p.22-40)", () => {
     const screen = renderScreen(b.m.state, b.store, b.m.silent);
     expect(screen[0]).toBe("QUIET OPERATION: AUDIO OUTPUT DENIED.");
     // Any key returns to Main Menu.
+    b.m.press({ kind: "key", key: "XIT" });
+    expect(b.m.state.kind).toBe("MAIN_MENU");
+  });
+
+  it("Silent Mode blocks Acoustic Coupler on RX too (MANUAL p.39)", () => {
+    const b = build({ silent: true });
+    toMenu(b.m);
+    b.m.press({ kind: "char", ch: "C" });
+    b.m.press({ kind: "char", ch: "A" });
+    b.m.press({ kind: "char", ch: "R" }); // Receive
+    b.m.press({ kind: "char", ch: "A" }); // Acoustic
+    expect(b.m.state).toEqual({ kind: "C_AUDIO_DENIED" });
     b.m.press({ kind: "key", key: "XIT" });
     expect(b.m.state.kind).toBe("MAIN_MENU");
   });

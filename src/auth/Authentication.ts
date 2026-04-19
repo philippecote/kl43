@@ -1,4 +1,4 @@
-// Challenge / Reply authentication (MANUAL pp.40–42, SPEC_DELTA §5.4).
+// Challenge / Reply authentication (MANUAL pp.40–42, SPEC Appendix A §5.4).
 //
 // The real KL-43 response algorithm is classified; this is a faithfulness-
 // preserving substitute that reproduces the manual's observable behaviour:
@@ -12,7 +12,7 @@
 //     "auth key slot" in the real device (MANUAL p.41 — "the same key" as
 //     encryption). Callers pass the key material directly.
 //
-// Substitute algorithm (marked SUBSTITUTE in SPEC_DELTA §5.4):
+// Substitute algorithm (marked SUBSTITUTE in SPEC Appendix A §5.4):
 //
 //   reply_bits = first 20 bits of HMAC-SHA-256(current_key,
 //                  ascii(challenge) || be64(bucket_10min))

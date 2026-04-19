@@ -171,13 +171,11 @@ acquisition.
 
 ## Documentation
 
-- [`docs/SPEC.md`](./docs/SPEC.md) — full functional and visual specification.
-- [`docs/SPEC_addendum_A_cipher.md`](./docs/SPEC_addendum_A_cipher.md) —
-  cipher backend design (LFSR-NLC, AES-128-CTR, DES-56-CBC).
-- [`docs/FAITHFULNESS.md`](./docs/FAITHFULNESS.md) — what is accurate to the
-  real device, what is deliberate divergence, and why.
-- [`docs/SPEC_DELTA.md`](./docs/SPEC_DELTA.md) — running log of spec changes
-  and rationale as manual evidence accumulated.
+- [`docs/SPEC.md`](./docs/SPEC.md) — full functional and visual specification
+  (v2.0). Appendix A folds in the manual-driven corrections; Appendix B is the
+  cipher backend decision record (LFSR-NLC, AES-128-CTR, DES-56-CBC).
+- [`docs/FAITHFULNESS.md`](./docs/FAITHFULNESS.md) — living register of what is
+  accurate to the real device, what is deliberate divergence, and why.
 - [`reference/`](./reference) — primary source material: the 1991 operator's
   manual (KL43C_manual_F_19910815.pdf), the 1994 Dutch KL royal army
   instruction card (KL43C_IK004164_19940502.pdf), the TRW feature

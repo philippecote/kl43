@@ -368,7 +368,7 @@ export function renderScreen(
     case "R_VIEWER": {
       if (!buffers) return [""];
       if (state.phonetic) {
-        // MANUAL Appendix C / SPEC_DELTA §1.1: verbal-fallback readout. Show
+        // MANUAL Appendix C / SPEC Appendix A §1.1: verbal-fallback readout. Show
         // the current cipher/word group on the top row with position counter,
         // and its phonetic spelling on the bottom row.
         const tokens = tokenizeForVerbal(buffers.get(state.slot).buffer.toString());
@@ -434,6 +434,9 @@ export function renderScreen(
 
     case "C_AUDIO_DENIED":
       return STRINGS.warn_quiet_audio.screen;
+
+    case "C_LOCAL_CIPHER_DENIED":
+      return STRINGS.warn_local_cipher.screen;
 
     case "C_TX_SLOT_SELECT":
       return messageSelectorScreen();

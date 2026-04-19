@@ -1,7 +1,7 @@
 // Transmittable form of a KL-43C ciphertext: the 12-char MI followed by a
 // base32-encoded CBC ciphertext body. The canonical on-display form groups
-// both components into 3-char chunks separated by single spaces (SPEC_DELTA
-// §6.7). On the wire the same grouped form is sent verbatim so hand-copy
+// both components into 3-char chunks separated by single spaces
+// (SPEC Appendix A §6.7). On the wire the same grouped form is sent verbatim so hand-copy
 // transcription from voice radio is byte-identical to the source.
 //
 // Framing is intentionally minimal — no length prefix, no version byte.

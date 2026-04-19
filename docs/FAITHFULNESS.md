@@ -104,10 +104,12 @@ citation. Summary: **60+ strings pinned** to MAN, **14 warnings** from Appendix 
 | Keypad | 59 rubber keys (estimated) | DOM/CSS keys with press animation | CM + MAN Appendix F | ❓ (exact count from photo trace) |
 | Key color | Dark grey rubber | #2B2B2B, subtle sheen | spec §10.1 | ❓ |
 | Key legends | Yellow-white screen-print | #E8E0B8 | spec §10.1 | ❓ |
-| Key click | Piezo, ~4 kHz fundamental, ~10 ms decay | SUBSTITUTE: 1600 Hz square, 8 ms, AD envelope; suppressed in Quiet Mode | inferred | 🔧 |
-| Confirmation chirp (encrypt/decrypt/key-load/auth/zeroize) | Single piezo tone, pitch/duration unrecorded | SUBSTITUTE: 880 Hz sine, 90 ms; suppressed in Quiet Mode | inferred | 🔧 |
-| Error beep (decrypt fail) | Piezo, pattern unrecorded | SUBSTITUTE: 440 Hz then 330 Hz squares (descending), ~280 ms total; plays regardless of Quiet Mode | inferred | 🔧 |
-| Power-off tone | Unknown | SUBSTITUTE: 220 Hz sine, 180 ms | inferred | 🔧 |
+| Key click | Piezo dome, ~4 kHz fundamental, ~10 ms decay | SUBSTITUTE: 800 Hz square, 8 ms, 0 ms attack, gain 0.035, + 1.5 ms noise burst (BP 1200 Hz, Q 1.4, gain 0.02); suppressed in Quiet Mode. Tuned to read as a soft plastic tick below the Bell-103 modem band so rapid typing doesn't sound like a kitchen timer. | inferred; `src/host/audio.ts:playKeyClick` | 🔧 |
+| Confirmation chirp (encrypt/decrypt/key-load/auth) | Single piezo tone, pitch/duration unrecorded | SUBSTITUTE: 1000 Hz sine, 150 ms, gain 0.08; suppressed in Quiet Mode | inferred; `audio.ts:playConfirm` | 🔧 |
+| Error beep (decrypt fail / key-invalid) | Piezo, pattern unrecorded | SUBSTITUTE: 1200 Hz → 600 Hz squares, 80 ms each, gain 0.09; overrides Quiet Mode | inferred; `audio.ts:playError` | 🔧 |
+| Power-on chirp | Unknown | SUBSTITUTE: 600 → 1200 Hz glide, 200 ms sine, gain 0.08 | inferred; `audio.ts:playPowerOn` | 🔧 |
+| Power-off tone | Unknown | SUBSTITUTE: 220 Hz sine, 180 ms, gain 0.08 | inferred; `audio.ts:playPowerOff` | 🔧 |
+| Zeroize flourish | Unknown | SUBSTITUTE: 1200 → 900 → 600 Hz descending squares, ~380 ms total, gain 0.09; overrides Quiet Mode | inferred; `audio.ts:playZeroize` | 🔧 |
 | Key travel / tactility | Rubber dome | Visual press animation + audio click only | — | 🚫 (mechanical feel impossible in software) |
 | Power LED | None documented | None | — | ✅ |
 | Acoustic coupler grille | Visible on bottom, concave cup for handset | Rendered | MAN Appendix A, CM | ✅ |
@@ -119,7 +121,7 @@ citation. Summary: **60+ strings pinned** to MAN, **14 warnings** from Appendix 
 |---|---|---|---|---|
 | Boot confirm timeout | 15 s | 15 s | MAN p.5 | ✅ |
 | Boot banner duration | Brief; no pinned value | 2.0 s (spec) | spec §4.2 | 🔧 |
-| First-time setup | 10-digit number + 15 letters | Implemented as initial gate | MAN p.5 Note 1 | ✅ (prompt) / 🔧 (validation) |
+| First-time setup (10-digit S/N + 15-letter owner code) | Enforced on virgin hardware | Not implemented; recorded as a deliberate omission in §7 | MAN p.5 Note 1 | 🚫 |
 | Encrypt throughput | ~3 MHz NSC800 doing a block cipher | Throttled to ≥500 ms for 2600-char message | inferred; spec §9.5 says ≤750 ms | 🔧 (period-accurate feel) |
 | Clock locked during encrypt/decrypt/xmit/recv/auth | Yes | Yes | MAN pp.17, 19, 44 | ✅ |
 | Silent Mode blocks acoustic modem | Yes | Yes | MAN p.39 | ✅ |
@@ -155,7 +157,8 @@ citation. Summary: **60+ strings pinned** to MAN, **14 warnings** from Appendix 
 | Real NSA cipher algorithm | Still classified as of 2026; no path to a faithful implementation. |
 | Real NSC800 firmware emulation | Firmware never publicly dumped; would require a declassified binary. |
 | Radio (U-229) interface | No real radio to talk to; RS-232 stub covers the pinout cosmetically. |
-| Thermal printer (TP-40S) | Physical device; we'll render a mock "printed" scroll for atmosphere only. |
+| Thermal printer (TP-40S) | Physical device; we render a DOM "printed scroll" overlay (`src/host/printer.ts`) triggered by the P-menu. Fixed-pitch type, optional tear line, auto-dismiss. Paper feed timing, thermal dot geometry, and ribbon artifacts are **not** modelled. |
+| First-time power-up ritual (10-digit S/N + 15-letter owner code) | Deliberately omitted. The real device requires it on virgin hardware (MAN p.5 Note 1) as an anti-theft gate; in a browser emulator with no hardware identity, prompting for it would be cargo-culted ceremony that every visitor has to skip on every visit. Recorded here so nobody re-adds it without thinking it through. |
 | Battery drain modelling | Not interesting without physical power path; "Low Battery" simulated by timer or test hook. |
 | Rubber-dome tactility | Impossible in software; visual press + audio click compensate. |
 | Mechanical watertightness | Not modelable. |
@@ -176,8 +179,8 @@ citation. Summary: **60+ strings pinned** to MAN, **14 warnings** from Appendix 
    photos; our `KEYPAD_LAYOUT.json` starts as an approximation.
 10. **Exact piezo click spectrum, confirmation chirp, error pattern, and
     power-off tone.** A field recording of a powered-on KL-43 would settle
-    all four. Current values in `src/host/audio.ts` are SUBSTITUTE and
-    flagged in §5.
+    all six (click, confirm, error, power-on, power-off, zeroize). Current
+    values in `src/host/audio.ts` are SUBSTITUTE and flagged in §4.
 11. **Photo of firmware version on a real boot screen.** Would pin the banner.
 
 ## 9 · Non-regression rules
