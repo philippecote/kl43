@@ -96,6 +96,10 @@ export async function startReceiver(
       echoCancellation: false,
       noiseSuppression: false,
       autoGainControl: false,
+      // Vendor-prefixed duplicates: some iOS / Chromium builds only honour
+      // one spelling. Harmless where unsupported.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...(({ googEchoCancellation: false, googNoiseSuppression: false, googAutoGainControl: false, googHighpassFilter: false } as any)),
     },
   });
   const ctx = getAudioContext();
@@ -124,6 +128,9 @@ export async function startReceiver(
   const ring = new Float32Array(ringLen);
   let head = 0; // monotonically increasing write index
 
+  // Returns { bin, energy } where energy is the window's total sample energy
+  // (sum of squares). We use that for a signal-presence gate so ambient room
+  // noise doesn't get decoded as random bits.
   const goertzelAt = (centerIdx: number, freq: number): number => {
     const start = centerIdx - halfWin;
     const w = (2 * Math.PI * freq) / sr;
@@ -139,10 +146,43 @@ export async function startReceiver(
     return s1 * s1 + s2 * s2 - coeff * s1 * s2;
   };
 
-  const detectAt = (centerIdx: number): 0 | 1 => {
+  const windowEnergy = (centerIdx: number): number => {
+    const start = centerIdx - halfWin;
+    let sum = 0;
+    for (let i = 0; i < winSize; i++) {
+      const idx = ((start + i) % ringLen + ringLen) % ringLen;
+      const s = ring[idx]!;
+      sum += s * s;
+    }
+    return sum;
+  };
+
+  // Rolling estimate of the ambient noise floor (window-energy units),
+  // slow-tracked while we're idle. We gate detection on being well above it.
+  let noiseFloor = 0;
+  // Minimum absolute energy needed to even consider the window as carrier —
+  // this is a floor even in a dead-quiet room so electronic hiss doesn't
+  // produce bits. Empirically ~winSize × 1e-5 on a ±1 float PCM signal is
+  // well below real carrier and well above a quiet mic.
+  const ABS_ENERGY_FLOOR = winSize * 1e-5;
+  // Tone bin must dominate the other by this ratio for a detection to count.
+  // A clean Bell 103 signal gives ratios in the 20–200× range; 2× keeps us
+  // comfortably above noise-driven near-ties.
+  const BIN_RATIO = 2.0;
+  // Window energy must be this many times the tracked noise floor.
+  const SNR_FACTOR = 6.0;
+
+  type Detection = { bit: 0 | 1; ok: boolean };
+  const detectAt = (centerIdx: number): Detection => {
     const em = goertzelAt(centerIdx, pair.mark);
     const es = goertzelAt(centerIdx, pair.space);
-    return em > es ? 1 : 0;
+    const energy = windowEnergy(centerIdx);
+    const big = em > es ? em : es;
+    const small = em > es ? es : em;
+    const bit: 0 | 1 = em > es ? 1 : 0;
+    const strong = energy > ABS_ENERGY_FLOOR && energy > noiseFloor * SNR_FACTOR;
+    const dominant = big > small * BIN_RATIO;
+    return { bit, ok: strong && dominant };
   };
 
   // Narrow-window detect: a short window centred tightly, used for finding
@@ -189,8 +229,17 @@ export async function startReceiver(
 
       if (state === "IDLE") {
         if (head % scanStep !== 0) continue;
-        const bit = detectAt(centerIdx);
-        if (bit === 0 && lastIdle === 1) {
+        const d = detectAt(centerIdx);
+        // Track the ambient floor from non-carrier windows with a slow EWMA.
+        // We only fold in weak windows (where the detector rejected the
+        // sample) so real carrier energy doesn't raise the gate on us.
+        if (!d.ok) {
+          const e = windowEnergy(centerIdx);
+          noiseFloor = noiseFloor === 0 ? e : noiseFloor * 0.98 + e * 0.02;
+          lastIdle = 1;
+          continue;
+        }
+        if (d.bit === 0 && lastIdle === 1) {
           // Start-bit candidate. Walk back with a narrow window to find the
           // actual mark→space edge (within a few samples), then validate by
           // re-checking at mid-start-bit. The first data bit is centred
@@ -205,36 +254,38 @@ export async function startReceiver(
             }
           }
           const midStart = Math.round(edge + spb / 2);
-          // Can't validate immediately — we may not have enough samples yet.
-          // Defer: seed nextTarget to mid-start-bit and let DATA state
-          // validate it as "bit 0 of a 9-bit sequence where bit 0 must be 0".
           nextTarget = midStart;
           state = "DATA";
-          bitIdx = -1; // -1 = pending start-bit validation
+          bitIdx = -1;
           byteAccum = 0;
         }
-        lastIdle = bit;
+        lastIdle = d.bit;
       } else {
         if (centerIdx < nextTarget) continue;
-        const bit = detectAt(nextTarget);
+        const d = detectAt(nextTarget);
+        // Drop-out guard: if carrier disappears mid-frame, abort. Ambient
+        // noise should never pass as a valid byte.
+        if (!d.ok) {
+          state = "IDLE";
+          lastIdle = 1;
+          continue;
+        }
         if (bitIdx === -1) {
-          // Validate start bit: must still be space at mid-bit. If not, it
-          // was a noise glitch — drop back to IDLE without emitting.
-          if (bit !== 0) {
+          if (d.bit !== 0) {
             state = "IDLE";
-            lastIdle = bit;
+            lastIdle = d.bit;
             continue;
           }
           bitIdx = 0;
           nextTarget += Math.round(spb);
         } else if (bitIdx < 8) {
-          byteAccum |= bit << bitIdx;
+          byteAccum |= d.bit << bitIdx;
           bitIdx++;
           nextTarget += Math.round(spb);
         } else {
-          if (bit === 1) onByteCb(byteAccum); // valid stop bit → emit
+          if (d.bit === 1) onByteCb(byteAccum);
           state = "IDLE";
-          lastIdle = bit;
+          lastIdle = d.bit;
         }
       }
     }
