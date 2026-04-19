@@ -4,6 +4,27 @@
   "version": "0.0.1",
   "type": "module",
   "description": "Faithful functional and visual emulator of the TSEC/KL-43C secure text terminal",
+  "homepage": "https://philippecote.github.io/kl43/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/philippecote/kl43.git"
+  },
+  "bugs": {
+    "url": "https://github.com/philippecote/kl43/issues"
+  },
+  "license": "MIT",
+  "keywords": [
+    "kl-43",
+    "kl43",
+    "tsec",
+    "nsa",
+    "cryptography",
+    "emulator",
+    "bell103",
+    "fsk",
+    "modem",
+    "vintage"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

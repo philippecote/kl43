@@ -1,6 +1,6 @@
 # KL-43C Emulator — Spec Addendum A: Cipher Backends
 
-**Addendum to:** `KL43_emulator_spec.md` v1.0
+**Addendum to:** `docs/SPEC.md` v1.0
 **Supersedes:** §6.1 "Overview" of the main spec
 **Status:** Decision record + implementation guide
 **Applies to:** `src/crypto/` module (being implemented concurrently)

@@ -5,3 +5,8 @@ dist/
 .vite/
 coverage/
 .claude/
+
+# Scratch / private drafts
+email_to_*.md
+scratch/
+TODO.local.md

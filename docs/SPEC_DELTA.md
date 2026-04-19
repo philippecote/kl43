@@ -1,6 +1,6 @@
-# SPEC_DELTA — Corrections to KL43_emulator_spec.md
+# SPEC_DELTA — Corrections to SPEC.md
 
-Every entry below is a place where `KL43_emulator_spec.md` (v1.0) disagrees with the
+Every entry below is a place where `docs/SPEC.md` (v1.0) disagrees with the
 primary source documents. The spec is preserved intact; this file is the errata.
 When the two conflict, the manual wins.
 
@@ -8,7 +8,7 @@ When the two conflict, the manual wins.
 - **MANUAL** — TRW KL-43C Operator's Manual, Part No. 410-308-1, Rev F, 1991-08-15
   (`reference/KL43C_manual_F_19910815.pdf`)
 - **FEATURE** — TRW *Feature Comparison: KL-43 Family of Cryptographic Devices*
-  (`KL43_features.pdf`)
+  (`reference/KL43_features.pdf`)
 - **DUTCH** — KL Royal Army Instruction Card IK004164, 1994-05-02
   (`reference/KL43C_IK004164_19940502.pdf`)
 
@@ -392,7 +392,7 @@ export const KL43C_SPEC = {
 
 ## Feature sheet contradictions
 
-The TRW *Feature Comparison* sheet (in `KL43_features.pdf`) disagrees with the
+The TRW *Feature Comparison* sheet (in `reference/KL43_features.pdf`) disagrees with the
 MANUAL in two small places. Manual wins in both:
 
 1. **NiCd battery life.** Feature sheet: 8 hours. MANUAL p.67: 6 hours.

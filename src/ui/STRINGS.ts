@@ -4,7 +4,7 @@
 //   - MANUAL: KL-43C Operator's Manual, Part No. 410-308-1, Revision F, 1991-08-15
 //     (reference/KL43C_manual_F_19910815.pdf)
 //   - FEATURE: TRW Feature Comparison: KL-43 Family of Cryptographic Devices
-//     (KL43_features.pdf)
+//     (reference/KL43_features.pdf)
 //   - SUBSTITUTE: no published source; our best reconstruction
 //   - UNCERTAIN: appears in manual but wording or punctuation is ambiguous
 //
