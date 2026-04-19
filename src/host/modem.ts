@@ -306,30 +306,38 @@ export async function startReceiver(
         lastIdle = d.bit;
       } else {
         if (centerIdx < nextTarget) continue;
-        const d = detectAt(nextTarget);
-        // Drop-out guard: if carrier disappears mid-frame, abort. Ambient
-        // noise should never pass as a valid byte.
-        if (!d.ok) {
+        // Inside a frame we trust whichever bin is louder. Only a total
+        // carrier collapse (energy below the absolute floor) aborts —
+        // transient dips in ratio or SNR must not cost us a byte.
+        const energy = windowEnergy(nextTarget);
+        if (energy < ABS_ENERGY_FLOOR) {
           state = "IDLE";
           lastIdle = 1;
           continue;
         }
+        const em = goertzelAt(nextTarget, pair.mark);
+        const es = goertzelAt(nextTarget, pair.space);
+        const bit: 0 | 1 = em > es ? 1 : 0;
         if (bitIdx === -1) {
-          if (d.bit !== 0) {
+          // Start-bit validation still requires clear dominance: if the bin
+          // ratio is near 1 at mid-start, it was a noise glitch.
+          const big = em > es ? em : es;
+          const small = em > es ? es : em;
+          if (bit !== 0 || big <= small * BIN_RATIO) {
             state = "IDLE";
-            lastIdle = d.bit;
+            lastIdle = bit;
             continue;
           }
           bitIdx = 0;
           nextTarget += Math.round(spb);
         } else if (bitIdx < 8) {
-          byteAccum |= d.bit << bitIdx;
+          byteAccum |= bit << bitIdx;
           bitIdx++;
           nextTarget += Math.round(spb);
         } else {
-          if (d.bit === 1) onByteCb(byteAccum);
+          if (bit === 1) onByteCb(byteAccum);
           state = "IDLE";
-          lastIdle = d.bit;
+          lastIdle = bit;
         }
       }
     }
