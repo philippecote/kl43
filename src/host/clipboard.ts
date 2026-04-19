@@ -40,7 +40,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
 let toastEl: HTMLDivElement | null = null;
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
-function showToast(message: string): void {
+export function showToast(message: string): void {
   if (!toastEl) {
     toastEl = document.createElement("div");
     toastEl.className = "app-toast";

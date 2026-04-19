@@ -13,7 +13,8 @@ import { buildKeypad, enableCalibration, keyEventFor } from "./keypad.js";
 import { playKeyClick, playConfirm, playError, playPowerOff, playPowerOn, playZeroize, unlockAudio } from "./audio.js";
 import { buildTopbar } from "./topbar.js";
 import { showPrintedScroll } from "./printer.js";
-import { installCopyHandler } from "./clipboard.js";
+import { installCopyHandler, showToast } from "./clipboard.js";
+import { handleShareOnBoot } from "./shareLink.js";
 import {
   transmitText,
   startReceiver,
@@ -224,6 +225,15 @@ window.addEventListener("pointerdown", unlockAudio, { once: true });
 window.addEventListener("keydown", unlockAudio, { once: true });
 
 installCopyHandler(machine, deps);
+
+// If the URL carries a shared key (?key=…&cipher=…&name=…), prompt on load.
+void handleShareOnBoot(deps.keyStore, cipherId).then((toast) => {
+  if (toast) {
+    persistKeys();
+    showToast(toast);
+    render();
+  }
+});
 
 // Physical keyboard: map browser keys to the emulator's event stream. Letters
 // and digits go as char events; Enter/Escape/Backspace/arrows map to named

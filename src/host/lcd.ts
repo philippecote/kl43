@@ -44,29 +44,42 @@ const RISE_MS = 30;   // time constant for 0 → 1
 const FALL_MS = 120;  // time constant for 1 → 0
 const SETTLE_EPS = 0.01;
 
-let persistence: Float32Array | null = null;
-let target: Float32Array | null = null;
-let gridW = 0;
-let gridH = 0;
-let currentCanvas: HTMLCanvasElement | null = null;
-let currentDot = 0;
-let currentViewAngle = 4;
-let rafHandle: number | null = null;
-let lastFrameMs = 0;
+// Per-canvas state: the pair demo renders into two canvases, so we keep
+// a LcdState per canvas rather than sharing a single set of module globals
+// (that caused B's pixels to bleed into A's persistence grid).
+type LcdState = {
+  persistence: Float32Array;
+  target: Float32Array;
+  gridW: number;
+  gridH: number;
+  dot: number;
+  viewAngle: number;
+  rafHandle: number | null;
+  lastFrameMs: number;
+};
 
-function ensureGrids(w: number, h: number): void {
-  const size = w * h;
-  if (!persistence || persistence.length !== size) {
-    persistence = new Float32Array(size);
-    target = new Float32Array(size);
-    gridW = w;
-    gridH = h;
-  }
+const lcdStates = new WeakMap<HTMLCanvasElement, LcdState>();
+
+function stateFor(canvas: HTMLCanvasElement): LcdState {
+  const existing = lcdStates.get(canvas);
+  if (existing) return existing;
+  const size = LCD_DOTS_W * LCD_DOTS_H;
+  const fresh: LcdState = {
+    persistence: new Float32Array(size),
+    target: new Float32Array(size),
+    gridW: LCD_DOTS_W,
+    gridH: LCD_DOTS_H,
+    dot: 0,
+    viewAngle: 4,
+    rafHandle: null,
+    lastFrameMs: 0,
+  };
+  lcdStates.set(canvas, fresh);
+  return fresh;
 }
 
-function writeTargetFromScreen(screen: LcdScreen): void {
-  if (!target) return;
-  target.fill(0);
+function writeTargetFromScreen(s: LcdState, screen: LcdScreen): void {
+  s.target.fill(0);
   const lines: [string, string] = [
     padLine(screen[0]),
     padLine(screen.length === 2 ? screen[1] : ""),
@@ -81,11 +94,11 @@ function writeTargetFromScreen(screen: LcdScreen): void {
         const bits = glyph[gy]!;
         if (bits === 0) continue;
         const y = rowOffset + gy;
-        if (y >= gridH) continue;
+        if (y >= s.gridH) continue;
         for (let gx = 0; gx < GLYPH_COLS; gx++) {
           if ((bits >> (GLYPH_COLS - 1 - gx)) & 1) {
             const x = colOffset + gx;
-            if (x < gridW) target[y * gridW + x] = 1;
+            if (x < s.gridW) s.target[y * s.gridW + x] = 1;
           }
         }
       }
@@ -93,41 +106,40 @@ function writeTargetFromScreen(screen: LcdScreen): void {
   }
 }
 
-function renderFrame(timestamp: number): void {
-  rafHandle = null;
-  if (!persistence || !target || !currentCanvas) return;
-  const ctx = currentCanvas.getContext("2d");
+function renderFrame(canvas: HTMLCanvasElement, timestamp: number): void {
+  const s = stateFor(canvas);
+  s.rafHandle = null;
+  const ctx = canvas.getContext("2d");
   if (!ctx) return;
 
-  const dt = lastFrameMs === 0 ? 16 : Math.min(100, timestamp - lastFrameMs);
-  lastFrameMs = timestamp;
+  const dt = s.lastFrameMs === 0 ? 16 : Math.min(100, timestamp - s.lastFrameMs);
+  s.lastFrameMs = timestamp;
 
   let settled = true;
-  for (let i = 0; i < persistence.length; i++) {
-    const tgt = target[i]!;
-    const cur = persistence[i]!;
+  for (let i = 0; i < s.persistence.length; i++) {
+    const tgt = s.target[i]!;
+    const cur = s.persistence[i]!;
     if (cur === tgt) continue;
     const tau = tgt > cur ? RISE_MS : FALL_MS;
     const k = 1 - Math.exp(-dt / tau);
     const next = cur + (tgt - cur) * k;
-    persistence[i] = next;
+    s.persistence[i] = next;
     if (Math.abs(next - tgt) > SETTLE_EPS) settled = false;
   }
-  // Snap near-settled pixels so the rAF loop can actually stop.
   if (settled) {
-    for (let i = 0; i < persistence.length; i++) persistence[i] = target[i]!;
+    for (let i = 0; i < s.persistence.length; i++) s.persistence[i] = s.target[i]!;
   }
 
-  const dot = currentDot;
-  const w = gridW * dot;
-  const h = gridH * dot;
+  const dot = s.dot;
+  const w = s.gridW * dot;
+  const h = s.gridH * dot;
   ctx.clearRect(0, 0, w, h);
   ctx.fillStyle = LIT;
-  const angleAlpha = contrastFor(currentViewAngle);
+  const angleAlpha = contrastFor(s.viewAngle);
 
-  for (let y = 0; y < gridH; y++) {
-    for (let x = 0; x < gridW; x++) {
-      const b = persistence[y * gridW + x]!;
+  for (let y = 0; y < s.gridH; y++) {
+    for (let x = 0; x < s.gridW; x++) {
+      const b = s.persistence[y * s.gridW + x]!;
       if (b <= SETTLE_EPS) continue;
       ctx.globalAlpha = angleAlpha * b;
       ctx.fillRect(x * dot, y * dot, dot, dot);
@@ -135,13 +147,14 @@ function renderFrame(timestamp: number): void {
   }
   ctx.globalAlpha = 1;
 
-  if (!settled) scheduleFrame();
-  else lastFrameMs = 0;
+  if (!settled) scheduleFrame(canvas);
+  else s.lastFrameMs = 0;
 }
 
-function scheduleFrame(): void {
-  if (rafHandle !== null) return;
-  rafHandle = requestAnimationFrame(renderFrame);
+function scheduleFrame(canvas: HTMLCanvasElement): void {
+  const s = stateFor(canvas);
+  if (s.rafHandle !== null) return;
+  s.rafHandle = requestAnimationFrame((t) => renderFrame(canvas, t));
 }
 
 export function paintLcd(
@@ -159,10 +172,9 @@ export function paintLcd(
   if (canvas.width !== w) canvas.width = w;
   if (canvas.height !== h) canvas.height = h;
 
-  ensureGrids(LCD_DOTS_W, LCD_DOTS_H);
-  writeTargetFromScreen(screen);
-  currentCanvas = canvas;
-  currentDot = dot;
-  currentViewAngle = viewAngle;
-  scheduleFrame();
+  const s = stateFor(canvas);
+  writeTargetFromScreen(s, screen);
+  s.dot = dot;
+  s.viewAngle = viewAngle;
+  scheduleFrame(canvas);
 }

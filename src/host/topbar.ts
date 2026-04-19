@@ -17,6 +17,8 @@ import type { KeyEvent } from "../machine/Machine.js";
 import type { BackendId } from "../crypto/CryptoBackend.js";
 import { ALL_BACKENDS } from "../crypto/backends/registry.js";
 import { modemConfig, MODEM_DEFAULTS, type ModemConfig } from "./modem.js";
+import { buildShareUrl } from "./shareLink.js";
+import { renderQrInto } from "./qrcode.js";
 
 type Dispatcher = (ev: KeyEvent) => void;
 type FlashKey = (id: string) => void;
@@ -43,23 +45,30 @@ async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
-function setupKeyGen(dispatch: Dispatcher, flashKey: FlashKey): void {
+function setupKeyGen(dispatch: Dispatcher, flashKey: FlashKey, currentCipher: BackendId): void {
   const dlg = document.getElementById("keygen-dialog");
   const keyText = document.getElementById("keygen-key");
   const statusEl = document.getElementById("keygen-status");
   const btnRegen = document.getElementById("keygen-regen") as HTMLButtonElement | null;
   const btnCopy = document.getElementById("keygen-copy") as HTMLButtonElement | null;
   const btnType = document.getElementById("keygen-type") as HTMLButtonElement | null;
+  const btnShare = document.getElementById("keygen-share") as HTMLButtonElement | null;
   const btnClose = document.getElementById("keygen-close") as HTMLButtonElement | null;
+  const sharePanel = document.getElementById("keygen-share-panel");
+  const shareUrlInput = document.getElementById("keygen-share-url") as HTMLInputElement | null;
+  const shareQr = document.getElementById("keygen-share-qr");
   const openBtn = document.getElementById("menu-keygen");
-  if (!dlg || !keyText || !statusEl || !btnRegen || !btnCopy || !btnType || !btnClose || !openBtn) return;
+  if (!dlg || !keyText || !statusEl || !btnRegen || !btnCopy || !btnType || !btnShare ||
+      !btnClose || !sharePanel || !shareUrlInput || !shareQr || !openBtn) return;
 
   let current = "";
   const setStatus = (msg: string) => { statusEl.textContent = msg; };
 
+  const hideShare = () => { sharePanel.hidden = true; };
   const regenerate = () => {
     current = generateKeyLetters();
     keyText.textContent = groupKey(current);
+    hideShare();
     setStatus("Select the text above to copy, or use the buttons.");
   };
 
@@ -75,8 +84,19 @@ function setupKeyGen(dispatch: Dispatcher, flashKey: FlashKey): void {
     }
     setStatus(`Typed ${current.length} letters into device.`);
   });
+  btnShare.addEventListener("click", async () => {
+    const url = buildShareUrl({ key: current, cipher: currentCipher, name: "SHARED" });
+    shareUrlInput.value = url;
+    sharePanel.hidden = false;
+    shareUrlInput.select();
+    try { renderQrInto(shareQr, url); } catch (err) { console.warn("[kl43] qr render failed:", err); }
+    const ok = await copyToClipboard(url);
+    setStatus(ok
+      ? "Share URL copied. Paste into the other device, or scan the QR code."
+      : "Share URL ready below. Copy manually — clipboard was unavailable.");
+  });
 
-  const close = () => dlg.classList.remove("show");
+  const close = () => { dlg.classList.remove("show"); hideShare(); };
   btnClose.addEventListener("click", close);
   dlg.addEventListener("click", (e) => { if (e.target === dlg) close(); });
   window.addEventListener("keydown", (e) => {
@@ -299,7 +319,7 @@ export function buildTopbar(
   currentCipherId: BackendId,
 ): void {
   loadModemConfig();
-  setupKeyGen(dispatch, flashKey);
+  setupKeyGen(dispatch, flashKey, currentCipherId);
   setupCipherPicker(currentCipherId);
   setupModemPicker();
 }

@@ -13,6 +13,7 @@
         <button id="menu-keygen" type="button">Key Generator</button>
         <button id="menu-cipher" type="button">Cipher</button>
         <button id="menu-modem" type="button">Modem</button>
+        <a href="./pair.html" title="Two KL-43s side-by-side with audible modem between them">Pair demo</a>
         <a href="https://github.com/philippecote/kl43/blob/master/reference/KL43C_manual_F_19910815.pdf" target="_blank" rel="noopener">Manual</a>
         <a href="https://github.com/philippecote/kl43/blob/master/docs/FAITHFULNESS.md" target="_blank" rel="noopener">Faithfulness</a>
         <a href="https://www.cryptomuseum.com/crypto/usa/kl43/" target="_blank" rel="noopener" title="Crypto Museum — the real history of the KL-43">Crypto Museum</a>
@@ -84,6 +85,17 @@
           <button id="keygen-regen" type="button">Regenerate</button>
           <button id="keygen-copy" type="button">Copy</button>
           <button id="keygen-type" type="button">Type into device</button>
+          <button id="keygen-share" type="button" title="Copy a link that loads this key on another device">Share link</button>
+        </div>
+        <div id="keygen-share-panel" class="keygen-share-panel" hidden>
+          <p class="keygen-share-hint">
+            Share this URL with the other station. Opening it asks them to
+            confirm, then loads the key into compartment 01 under the same
+            cipher. For demo use only — URLs are not a secure key-exchange
+            channel.
+          </p>
+          <input id="keygen-share-url" type="text" readonly aria-label="Share URL"/>
+          <div id="keygen-share-qr" class="keygen-share-qr" aria-label="QR code of share URL"></div>
         </div>
       </div>
     </div>

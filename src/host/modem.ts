@@ -99,6 +99,20 @@ export async function transmitText(
   text: string,
   pair: FreqPair = BELL103_ORIGINATE,
 ): Promise<void> {
+  return transmitTextTo(text, pair, null);
+}
+
+/**
+ * Transmit FSK audio, optionally routing into a custom destination node
+ * (plus the main output) instead of just the speakers. Used by the pair
+ * demo so station-A's transmit feeds station-B's receiver directly via a
+ * shared AudioContext node.
+ */
+export async function transmitTextTo(
+  text: string,
+  pair: FreqPair,
+  extraDestination: AudioNode | null,
+): Promise<void> {
   const ctx = getAudioContext();
   if (!ctx) throw new Error("No AudioContext");
   if (ctx.state === "suspended") await ctx.resume();
@@ -107,6 +121,7 @@ export async function transmitText(
   const src = ctx.createBufferSource();
   src.buffer = buf;
   src.connect(ctx.destination);
+  if (extraDestination) src.connect(extraDestination);
   await new Promise<void>((resolve) => {
     src.onended = () => resolve();
     src.start();
@@ -145,6 +160,33 @@ export async function startReceiver(
   if (ctx.state === "suspended") await ctx.resume();
 
   const src = ctx.createMediaStreamSource(stream);
+  const stopStream = () => stream.getTracks().forEach((t) => t.stop());
+  return attachReceiver(ctx, src, pair, stopStream);
+}
+
+/**
+ * Run the FSK demodulator against an arbitrary AudioNode source instead of
+ * the microphone. Used by the pair demo: station B taps station A's TX
+ * bus directly, skipping the acoustic coupling and mic/speaker layer.
+ *
+ * The caller owns the upstream node and is responsible for disconnecting
+ * anything it wired in. `stop()` on the returned handle only tears down
+ * the internal Goertzel graph.
+ */
+export function startReceiverFromNode(
+  source: AudioNode,
+  pair: FreqPair = BELL103_ORIGINATE,
+): ReceiverHandle {
+  const ctx = source.context as AudioContext;
+  return attachReceiver(ctx, source, pair, () => {});
+}
+
+function attachReceiver(
+  ctx: AudioContext,
+  src: AudioNode,
+  pair: FreqPair,
+  onStop: () => void,
+): ReceiverHandle {
   // ScriptProcessorNode is deprecated but reliable for this use.
   const bufSize = 1024;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -384,7 +426,7 @@ export async function startReceiver(
         proc.disconnect();
         mute.disconnect();
       } catch { /* ignore */ }
-      stream.getTracks().forEach((t) => t.stop());
+      onStop();
     },
     onByte: (cb) => { onByteCb = cb; },
   };
