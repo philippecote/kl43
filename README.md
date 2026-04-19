@@ -14,9 +14,11 @@ official retirement in **May 2013**.
 > keypad to turn it on, then press **`Y`** within 15 seconds to confirm
 > boot. From there, letters and digits on your physical keyboard map
 > straight to the keypad; `Enter` is `ENTER`, `Esc` is `XIT`, `Backspace`
-> is `DCH`. There is no in-app walkthrough — the operator's manual
-> (linked in the topbar) is still the authoritative guide, as it was in
-> 1991.
+> is `DCH`. `Ctrl` / `Cmd` + `C` in the editor or Review copies the
+> current message (plaintext or cipher groups) to the clipboard; paste
+> works anywhere you'd type. There is no in-app walkthrough — the
+> operator's manual (linked in the topbar) is still the authoritative
+> guide, as it was in 1991.
 
 Open the demo on **two phones, two laptops, or one of each** — anything with
 a browser, a speaker, and a microphone. Pick the same key and cipher backend

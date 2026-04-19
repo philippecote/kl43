@@ -13,6 +13,7 @@ import { buildKeypad, enableCalibration, keyEventFor } from "./keypad.js";
 import { playKeyClick, playConfirm, playError, playPowerOff, playPowerOn, playZeroize, unlockAudio } from "./audio.js";
 import { buildTopbar } from "./topbar.js";
 import { showPrintedScroll } from "./printer.js";
+import { installCopyHandler } from "./clipboard.js";
 import {
   transmitText,
   startReceiver,
@@ -221,6 +222,8 @@ buildTopbar(dispatch, flashKey, cipherId);
 // Resume AudioContext on the first user gesture (browser autoplay policy).
 window.addEventListener("pointerdown", unlockAudio, { once: true });
 window.addEventListener("keydown", unlockAudio, { once: true });
+
+installCopyHandler(machine, deps);
 
 // Physical keyboard: map browser keys to the emulator's event stream. Letters
 // and digits go as char events; Enter/Escape/Backspace/arrows map to named
