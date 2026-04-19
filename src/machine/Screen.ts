@@ -22,6 +22,26 @@ function formatKeyHeader(c: Compartment | null): string {
   return `${id}-${c.name}-${uu}`;
 }
 
+const LCD_COLS = 40;
+
+/**
+ * Compose a 2x40 screen from a base (left column, left-aligned) and an
+ * indicator (right column, right-aligned). Both rows are padded to exactly
+ * LCD_COLS characters. If a row's left+right content overflows 40 chars it
+ * is truncated on the right; callers should avoid that case.
+ */
+function twoColScreen(base: LcdScreen, indicator: LcdScreen): LcdScreen {
+  const pad = (left: string, right: string): string => {
+    if (left.length + right.length >= LCD_COLS) {
+      return (left + right).slice(0, LCD_COLS);
+    }
+    return left + " ".repeat(LCD_COLS - left.length - right.length) + right;
+  };
+  const baseRow2 = base.length === 2 ? base[1]! : "";
+  const indRow2 = indicator.length === 2 ? indicator[1]! : "";
+  return [pad(base[0]!, indicator[0]!), pad(baseRow2, indRow2)];
+}
+
 export function renderScreen(
   state: State,
   store: KeyCompartmentStore,
@@ -288,6 +308,18 @@ export function renderScreen(
 
     case "C_DIR_SELECT":
       return STRINGS.comms_xmit_or_recv.screen;
+
+    case "C_AUDIO_SUBMODE":
+      return twoColScreen(
+        STRINGS.comms_acoustic_or_connector.screen,
+        STRINGS.comms_select_function_indicator.screen,
+      );
+
+    case "C_ACOUSTIC_LINES":
+      return twoColScreen(
+        STRINGS.comms_us_or_euro_lines.screen,
+        STRINGS.comms_select_function_indicator.screen,
+      );
 
     case "C_TX_SLOT_SELECT":
       return STRINGS.wp_message_selector.screen;

@@ -261,6 +261,11 @@ export const STRINGS = {
     screen: ["U - U.S. Lines", "E - European Lines"],
     source: M(23, "Communications — acoustic transmit level"),
   },
+  comms_select_function_indicator: {
+    id: "comms_select_function_indicator",
+    screen: ["Select", "Function"],
+    source: M(23, "Communications — Audio sub-selector and Lines indicator column. Manual's Lines screen prints 'Message to Use' but every other sub-selector uses 'Function'; treated as transcription error."),
+  },
   comms_please_wait: {
     id: "comms_please_wait",
     screen: ["Please Wait"],

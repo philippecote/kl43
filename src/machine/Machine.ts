@@ -197,6 +197,11 @@ export type State =
   // on-wire display form; RX waits until the host calls `feedReceived()`.
   | { kind: "C_MODE_SELECT" }
   | { kind: "C_DIR_SELECT"; mode: "AUDIO" | "DIGITAL" }
+  // Audio sub-selectors (MANUAL p.23). Only reached when mode === "AUDIO";
+  // digital skips these. `dir` carries the TX/RX decision forward so the
+  // acoustic/connector and U.S./European prompts can route correctly.
+  | { kind: "C_AUDIO_SUBMODE"; dir: "TX" | "RX" }
+  | { kind: "C_ACOUSTIC_LINES"; dir: "TX" | "RX" }
   | { kind: "C_TX_SLOT_SELECT"; mode: "AUDIO" | "DIGITAL" }
   | { kind: "C_TX_READY"; slot: SlotId; mode: "AUDIO" | "DIGITAL" }
   | { kind: "C_TX_BUSY"; slot: SlotId; mode: "AUDIO" | "DIGITAL"; remainingMs: number }
@@ -1081,11 +1086,51 @@ export class Machine {
       }
       if (event.kind === "char") {
         const ch = event.ch.toUpperCase();
-        if (ch === "T") this._state = { kind: "C_TX_SLOT_SELECT", mode: s.mode };
-        else if (ch === "R") {
+        if (ch === "T") {
+          this._state = s.mode === "AUDIO"
+            ? { kind: "C_AUDIO_SUBMODE", dir: "TX" }
+            : { kind: "C_TX_SLOT_SELECT", mode: s.mode };
+        } else if (ch === "R") {
           // Default RX into slot A. A host that delivers a message via
           // `feedReceived` can redirect by passing a slot explicitly.
-          this._state = { kind: "C_RX_WAIT", mode: s.mode, slot: "A" };
+          this._state = s.mode === "AUDIO"
+            ? { kind: "C_AUDIO_SUBMODE", dir: "RX" }
+            : { kind: "C_RX_WAIT", mode: s.mode, slot: "A" };
+        }
+      }
+      return [];
+    }
+    if (s.kind === "C_AUDIO_SUBMODE") {
+      if (event.kind === "key" && event.key === "XIT") {
+        this._state = { kind: "C_DIR_SELECT", mode: "AUDIO" };
+        return [];
+      }
+      if (event.kind === "char") {
+        const ch = event.ch.toUpperCase();
+        if (ch === "A") {
+          this._state = { kind: "C_ACOUSTIC_LINES", dir: s.dir };
+        } else if (ch === "C") {
+          // Connector-audio path skips the U.S./European lines prompt.
+          this._state = s.dir === "TX"
+            ? { kind: "C_TX_SLOT_SELECT", mode: "AUDIO" }
+            : { kind: "C_RX_WAIT", mode: "AUDIO", slot: "A" };
+        }
+      }
+      return [];
+    }
+    if (s.kind === "C_ACOUSTIC_LINES") {
+      if (event.kind === "key" && event.key === "XIT") {
+        this._state = { kind: "C_AUDIO_SUBMODE", dir: s.dir };
+        return [];
+      }
+      if (event.kind === "char") {
+        const ch = event.ch.toUpperCase();
+        if (ch === "U" || ch === "E") {
+          // U.S./European selection only affects the analog transmit level;
+          // it has no downstream effect in this emulator.
+          this._state = s.dir === "TX"
+            ? { kind: "C_TX_SLOT_SELECT", mode: "AUDIO" }
+            : { kind: "C_RX_WAIT", mode: "AUDIO", slot: "A" };
         }
       }
       return [];

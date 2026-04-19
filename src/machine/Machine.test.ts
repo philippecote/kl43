@@ -1005,7 +1005,7 @@ describe("Print (MANUAL p.45-46)", () => {
 describe("Communications (MANUAL p.22-40)", () => {
   function toMenu(m: Machine) { powerOn(m); m.press({ kind: "key", key: "ENTER" }); }
 
-  it("C → A (audio) → T (tx) → A (slot A) → ENTER transmits and completes", () => {
+  it("C → A (audio) → T (tx) → A (acoustic) → U (US lines) → A (slot A) → ENTER transmits and completes", () => {
     const b = build();
     // Mark slot A as encrypted so assertTransmittable allows it.
     b.buffers.get("A").buffer.insertString("ABCDEFGHIJKL ZZZ ZZZ");
@@ -1016,6 +1016,10 @@ describe("Communications (MANUAL p.22-40)", () => {
     b.m.press({ kind: "char", ch: "A" });
     expect(b.m.state).toEqual({ kind: "C_DIR_SELECT", mode: "AUDIO" });
     b.m.press({ kind: "char", ch: "T" });
+    expect(b.m.state).toEqual({ kind: "C_AUDIO_SUBMODE", dir: "TX" });
+    b.m.press({ kind: "char", ch: "A" });
+    expect(b.m.state).toEqual({ kind: "C_ACOUSTIC_LINES", dir: "TX" });
+    b.m.press({ kind: "char", ch: "U" });
     expect(b.m.state).toEqual({ kind: "C_TX_SLOT_SELECT", mode: "AUDIO" });
     b.m.press({ kind: "char", ch: "A" });
     expect(b.m.state).toEqual({ kind: "C_TX_READY", slot: "A", mode: "AUDIO" });
@@ -1041,9 +1045,97 @@ describe("Communications (MANUAL p.22-40)", () => {
     b.m.press({ kind: "char", ch: "C" });
     b.m.press({ kind: "char", ch: "A" });
     b.m.press({ kind: "char", ch: "T" });
+    b.m.press({ kind: "char", ch: "C" }); // connector-audio skips the lines prompt
     b.m.press({ kind: "char", ch: "A" });
     // Rejected silently → returns to Main Menu without C_TX_READY.
     expect(b.m.state.kind).toBe("MAIN_MENU");
+  });
+
+  it("audio submode screen shows Acoustic/Connector with Select/Function indicator, 40 chars", () => {
+    const b = build();
+    toMenu(b.m);
+    b.m.press({ kind: "char", ch: "C" });
+    b.m.press({ kind: "char", ch: "A" });
+    b.m.press({ kind: "char", ch: "T" });
+    expect(b.m.state).toEqual({ kind: "C_AUDIO_SUBMODE", dir: "TX" });
+    const [r1, r2] = renderScreen(b.m.state, b.store, false, b.buffers);
+    expect(r1).toHaveLength(40);
+    expect(r2).toHaveLength(40);
+    expect(r1).toBe("A - Acoustic Coupler              Select");
+    expect(r2).toBe("C - Connector Audio             Function");
+  });
+
+  it("acoustic lines screen shows U.S./European with Select/Function indicator, 40 chars", () => {
+    const b = build();
+    toMenu(b.m);
+    b.m.press({ kind: "char", ch: "C" });
+    b.m.press({ kind: "char", ch: "A" });
+    b.m.press({ kind: "char", ch: "T" });
+    b.m.press({ kind: "char", ch: "A" });
+    expect(b.m.state).toEqual({ kind: "C_ACOUSTIC_LINES", dir: "TX" });
+    const [r1, r2] = renderScreen(b.m.state, b.store, false, b.buffers);
+    expect(r1).toHaveLength(40);
+    expect(r2).toHaveLength(40);
+    expect(r1).toBe("U - U.S. Lines                    Select");
+    expect(r2).toBe("E - European Lines              Function");
+  });
+
+  it("audio submode C (connector) skips the U.S./European lines prompt on TX", () => {
+    const b = build();
+    b.buffers.get("A").buffer.insertString("ABCDEFGHIJKL ZZZ");
+    b.buffers.markEncrypted("A");
+    toMenu(b.m);
+    b.m.press({ kind: "char", ch: "C" });
+    b.m.press({ kind: "char", ch: "A" });
+    b.m.press({ kind: "char", ch: "T" });
+    b.m.press({ kind: "char", ch: "C" });
+    expect(b.m.state).toEqual({ kind: "C_TX_SLOT_SELECT", mode: "AUDIO" });
+  });
+
+  it("audio RX: T→A (acoustic) → E (euro) lands in C_RX_WAIT with AUDIO mode", () => {
+    const b = build();
+    toMenu(b.m);
+    b.m.press({ kind: "char", ch: "C" });
+    b.m.press({ kind: "char", ch: "A" });
+    b.m.press({ kind: "char", ch: "R" });
+    expect(b.m.state).toEqual({ kind: "C_AUDIO_SUBMODE", dir: "RX" });
+    b.m.press({ kind: "char", ch: "A" });
+    expect(b.m.state).toEqual({ kind: "C_ACOUSTIC_LINES", dir: "RX" });
+    b.m.press({ kind: "char", ch: "E" });
+    expect(b.m.state).toEqual({ kind: "C_RX_WAIT", mode: "AUDIO", slot: "A" });
+  });
+
+  it("audio RX: connector skips the lines prompt", () => {
+    const b = build();
+    toMenu(b.m);
+    b.m.press({ kind: "char", ch: "C" });
+    b.m.press({ kind: "char", ch: "A" });
+    b.m.press({ kind: "char", ch: "R" });
+    b.m.press({ kind: "char", ch: "C" });
+    expect(b.m.state).toEqual({ kind: "C_RX_WAIT", mode: "AUDIO", slot: "A" });
+  });
+
+  it("XIT from C_AUDIO_SUBMODE returns to C_DIR_SELECT; XIT from C_ACOUSTIC_LINES returns to submode", () => {
+    const b = build();
+    toMenu(b.m);
+    b.m.press({ kind: "char", ch: "C" });
+    b.m.press({ kind: "char", ch: "A" });
+    b.m.press({ kind: "char", ch: "T" });
+    b.m.press({ kind: "char", ch: "A" });
+    expect(b.m.state).toEqual({ kind: "C_ACOUSTIC_LINES", dir: "TX" });
+    b.m.press({ kind: "key", key: "XIT" });
+    expect(b.m.state).toEqual({ kind: "C_AUDIO_SUBMODE", dir: "TX" });
+    b.m.press({ kind: "key", key: "XIT" });
+    expect(b.m.state).toEqual({ kind: "C_DIR_SELECT", mode: "AUDIO" });
+  });
+
+  it("digital path is unchanged by the audio sub-selectors (no submode insertion)", () => {
+    const b = build();
+    toMenu(b.m);
+    b.m.press({ kind: "char", ch: "C" });
+    b.m.press({ kind: "char", ch: "D" });
+    b.m.press({ kind: "char", ch: "T" });
+    expect(b.m.state).toEqual({ kind: "C_TX_SLOT_SELECT", mode: "DIGITAL" });
   });
 
   it("C → D (digital) → R → feedReceived lands bytes and completes", () => {
@@ -1069,6 +1161,7 @@ describe("Communications (MANUAL p.22-40)", () => {
     b.m.press({ kind: "char", ch: "C" });
     b.m.press({ kind: "char", ch: "A" });
     b.m.press({ kind: "char", ch: "T" });
+    b.m.press({ kind: "char", ch: "C" }); // connector-audio skips the lines prompt
     b.m.press({ kind: "char", ch: "A" });
     b.m.press({ kind: "key", key: "ENTER" });
     b.m.press({ kind: "tick", elapsedMs: TX_BUSY_MS });
