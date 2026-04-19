@@ -1449,6 +1449,16 @@ export class Machine {
           }
           throw err;
         }
+        // MANUAL p.12: the classification "becomes part of the message" —
+        // prepend it (uppercased + trimmed) to the editor buffer on a line
+        // of its own so it is visible in Review, encrypted with the body,
+        // transmitted on the wire, and shown after decrypt on the receiver.
+        const normalized = s.text.trim().toUpperCase();
+        if (normalized.length > 0) {
+          const buf = this.deps.buffers.get(s.slot).buffer;
+          buf.clear();
+          buf.insertString(normalized + "\n");
+        }
         this._state = { kind: "WP_EDITOR", slot: s.slot, mode: "PLAIN" };
         return [];
       }

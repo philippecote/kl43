@@ -539,6 +539,22 @@ describe("Word Processor sub-machine (MANUAL pp.10–14)", () => {
     m.press({ kind: "key", key: "ENTER" });
     expect(m.state).toEqual({ kind: "WP_EDITOR", slot: "A", mode: "PLAIN" });
     expect(buffers.get("A").classification).toBe("SECRET");
+    // MANUAL p.12: classification becomes part of the message. The editor
+    // buffer is seeded with it so it is encrypted with the body and shown
+    // at Review / after decrypt on the receiver.
+    expect(buffers.get("A").buffer.toString()).toBe("SECRET\n");
+  });
+
+  it("non-empty classification is typed in uppercase as a header line in the editor buffer", () => {
+    const { m, buffers } = build();
+    toWp(m);
+    m.press({ kind: "char", ch: "A" });
+    m.press({ kind: "tick", elapsedMs: 2000 });
+    m.press({ kind: "char", ch: "P" });
+    for (const ch of "TOP SECRET") m.press({ kind: "char", ch });
+    m.press({ kind: "key", key: "ENTER" });
+    for (const ch of "hello") m.press({ kind: "char", ch });
+    expect(buffers.get("A").buffer.toString()).toBe("TOP SECRET\nHELLO");
   });
 
   it("classification DCH deletes the most-recent character", () => {
@@ -1445,7 +1461,9 @@ describe("Editor navigation keys (MANUAL p.13)", () => {
     m.press({ kind: "char", ch: "A" });
     m.press({ kind: "tick", elapsedMs: 2000 });
     m.press({ kind: "char", ch: "P" });
-    for (const ch of "CLASS") m.press({ kind: "char", ch });
+    // Skip the classification so navigation tests can reason about cursor
+    // offsets against the literal payload, not a classification-prefixed
+    // buffer (MANUAL p.12: classification becomes part of the message).
     m.press({ kind: "key", key: "ENTER" });
     for (const ch of payload) m.press({ kind: "char", ch });
     return { m, buffers };
