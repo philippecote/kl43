@@ -12,6 +12,7 @@
       <nav class="topbar-menu" aria-label="App menu">
         <button id="menu-keygen" type="button">Key Generator</button>
         <button id="menu-cipher" type="button">Cipher</button>
+        <button id="menu-modem" type="button">Modem</button>
         <a href="/reference/KL43C_manual_F_19910815.pdf" target="_blank" rel="noopener">Manual</a>
         <a href="/FAITHFULNESS.md" target="_blank" rel="noopener">Faithfulness</a>
       </nav>
@@ -29,6 +30,25 @@
         </p>
         <form id="cipher-form" class="cipher-form"></form>
         <p id="cipher-status" class="keygen-status"></p>
+      </div>
+    </div>
+    <div id="modem-dialog" class="keygen-dialog" role="dialog" aria-modal="true" aria-labelledby="modem-title">
+      <div class="keygen-panel">
+        <div class="keygen-header">
+          <h2 id="modem-title">Modem receiver sensitivity</h2>
+          <button id="modem-close" type="button" aria-label="Close">×</button>
+        </div>
+        <p class="keygen-help">
+          Tune the FSK demodulator's acquisition gate. Lower thresholds make
+          the receiver pick up quieter or noisier signals, at the cost of
+          more false triggers from room noise. Changes apply live — you do
+          not need to stop the mic. Defaults are tuned for over-the-air
+          coupling between phone speaker and laptop mic.
+        </p>
+        <form id="modem-form" class="modem-form"></form>
+        <div class="keygen-actions">
+          <button id="modem-reset" type="button">Reset to defaults</button>
+        </div>
       </div>
     </div>
     <div id="keygen-dialog" class="keygen-dialog" role="dialog" aria-modal="true" aria-labelledby="keygen-title">

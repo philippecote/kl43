@@ -16,6 +16,7 @@ import { decodeKey, appendChecksum } from "../crypto/KeyCodec.js";
 import type { KeyEvent } from "../machine/Machine.js";
 import type { BackendId } from "../crypto/CryptoBackend.js";
 import { ALL_BACKENDS } from "../crypto/backends/registry.js";
+import { modemConfig, MODEM_DEFAULTS, type ModemConfig } from "./modem.js";
 
 type Dispatcher = (ev: KeyEvent) => void;
 type FlashKey = (id: string) => void;
@@ -130,11 +131,175 @@ function setupCipherPicker(currentId: BackendId): void {
   });
 }
 
+type KnobSpec = {
+  key: keyof ModemConfig;
+  label: string;
+  help: string;
+  min: number;
+  max: number;
+  step: number;
+  /** Optional formatter for the displayed value (default: 2 decimals). */
+  format?: (v: number) => string;
+};
+
+const MODEM_KNOBS: KnobSpec[] = [
+  {
+    key: "binRatio",
+    label: "Bin ratio (acquisition)",
+    help:
+      "Minimum ratio between winning and losing Goertzel bins to accept a " +
+      "detection. Lower = more sensitive but more false triggers from noise.",
+    min: 1.05,
+    max: 3,
+    step: 0.05,
+  },
+  {
+    key: "strongBinRatio",
+    label: "Strong-tone bypass",
+    help:
+      "If one bin dominates by at least this ratio, accept even when SNR " +
+      "is modest. Lower = pick up quieter clean tones faster.",
+    min: 1.5,
+    max: 10,
+    step: 0.25,
+  },
+  {
+    key: "snrFactor",
+    label: "SNR floor",
+    help:
+      "Window energy must exceed the tracked noise floor by this factor. " +
+      "Lower = more sensitive in noisy rooms.",
+    min: 1.1,
+    max: 8,
+    step: 0.1,
+  },
+  {
+    key: "absEnergyScale",
+    label: "Absolute energy floor",
+    help:
+      "Dead-silence cutoff (per-sample energy). Below this, no signal is " +
+      "considered present even in a totally quiet room.",
+    min: 1e-8,
+    max: 1e-3,
+    step: 1e-8,
+    format: (v) => v.toExponential(1),
+  },
+  {
+    key: "preambleMs",
+    label: "TX preamble (ms)",
+    help:
+      "Length of mark tone sent before data, so the receiver's noise-floor " +
+      "estimate can settle and a slightly late RX still catches byte one.",
+    min: 0,
+    max: 1500,
+    step: 25,
+    format: (v) => `${Math.round(v)}`,
+  },
+];
+
+const MODEM_STORAGE = "kl43.modem.v1";
+
+function loadModemConfig(): void {
+  try {
+    const raw = localStorage.getItem(MODEM_STORAGE);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as Partial<ModemConfig>;
+    for (const k of Object.keys(MODEM_DEFAULTS) as (keyof ModemConfig)[]) {
+      const v = parsed[k];
+      if (typeof v === "number" && Number.isFinite(v)) modemConfig[k] = v;
+    }
+  } catch { /* ignore corrupt storage */ }
+}
+
+function saveModemConfig(): void {
+  try { localStorage.setItem(MODEM_STORAGE, JSON.stringify(modemConfig)); }
+  catch { /* ignore quota */ }
+}
+
+function setupModemPicker(): void {
+  const dlg = document.getElementById("modem-dialog");
+  const form = document.getElementById("modem-form");
+  const btnClose = document.getElementById("modem-close") as HTMLButtonElement | null;
+  const btnReset = document.getElementById("modem-reset") as HTMLButtonElement | null;
+  const openBtn = document.getElementById("menu-modem");
+  if (!dlg || !form || !btnClose || !btnReset || !openBtn) return;
+
+  const rows = new Map<keyof ModemConfig, { input: HTMLInputElement; value: HTMLSpanElement; fmt: (v: number) => string }>();
+
+  form.innerHTML = "";
+  for (const spec of MODEM_KNOBS) {
+    const row = document.createElement("div");
+    row.className = "knob";
+    const id = `modem-knob-${spec.key}`;
+    const label = document.createElement("label");
+    label.className = "knob-label";
+    label.htmlFor = id;
+    label.textContent = spec.label;
+    const value = document.createElement("span");
+    value.className = "knob-value";
+    const input = document.createElement("input");
+    input.type = "range";
+    input.id = id;
+    input.min = String(spec.min);
+    input.max = String(spec.max);
+    input.step = String(spec.step);
+    const help = document.createElement("div");
+    help.className = "knob-help";
+    help.textContent = spec.help;
+    row.appendChild(label);
+    row.appendChild(value);
+    row.appendChild(input);
+    row.appendChild(help);
+    form.appendChild(row);
+
+    const fmt = spec.format ?? ((v: number) => v.toFixed(2));
+    rows.set(spec.key, { input, value, fmt });
+  }
+
+  const refresh = () => {
+    for (const spec of MODEM_KNOBS) {
+      const row = rows.get(spec.key);
+      if (!row) continue;
+      const v = modemConfig[spec.key];
+      row.input.value = String(v);
+      row.value.textContent = row.fmt(v);
+    }
+  };
+
+  form.addEventListener("input", (e) => {
+    const input = e.target as HTMLInputElement;
+    const spec = MODEM_KNOBS.find((s) => input.id === `modem-knob-${s.key}`);
+    if (!spec) return;
+    const v = Number(input.value);
+    if (!Number.isFinite(v)) return;
+    modemConfig[spec.key] = v;
+    const row = rows.get(spec.key);
+    if (row) row.value.textContent = row.fmt(v);
+    saveModemConfig();
+  });
+
+  btnReset.addEventListener("click", () => {
+    Object.assign(modemConfig, MODEM_DEFAULTS);
+    saveModemConfig();
+    refresh();
+  });
+
+  const close = () => dlg.classList.remove("show");
+  btnClose.addEventListener("click", close);
+  dlg.addEventListener("click", (e) => { if (e.target === dlg) close(); });
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && dlg.classList.contains("show")) { close(); e.preventDefault(); }
+  });
+  openBtn.addEventListener("click", () => { refresh(); dlg.classList.add("show"); });
+}
+
 export function buildTopbar(
   dispatch: Dispatcher,
   flashKey: FlashKey,
   currentCipherId: BackendId,
 ): void {
+  loadModemConfig();
   setupKeyGen(dispatch, flashKey);
   setupCipherPicker(currentCipherId);
+  setupModemPicker();
 }

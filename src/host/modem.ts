@@ -19,6 +19,33 @@ import { getAudioContext } from "./audio.js";
 
 export type FreqPair = { mark: number; space: number };
 
+// Live-tunable receiver gate config. Sliders in the Modem settings dialog
+// (see topbar.ts) write directly into this object; `startReceiver` reads
+// the current values on every sample, so changes take effect instantly
+// without restarting the mic.
+export type ModemConfig = {
+  /** Tone bin must dominate the other by this ratio under the main gate. */
+  binRatio: number;
+  /** Bin ratio that bypasses the SNR requirement (clear tone in the quiet). */
+  strongBinRatio: number;
+  /** Window energy must exceed noise floor * this factor. */
+  snrFactor: number;
+  /** Minimum absolute window energy (times winSize) to even consider. */
+  absEnergyScale: number;
+  /** Milliseconds of continuous mark preamble before data. */
+  preambleMs: number;
+};
+
+export const MODEM_DEFAULTS: ModemConfig = {
+  binRatio: 1.35,
+  strongBinRatio: 4.0,
+  snrFactor: 1.8,
+  absEnergyScale: 1e-6,
+  preambleMs: 400,
+};
+
+export const modemConfig: ModemConfig = { ...MODEM_DEFAULTS };
+
 // Per MANUAL / spec §7.1. Originate used by whichever side transmits first.
 export const BELL103_ORIGINATE: FreqPair = { mark: 1270, space: 1070 };
 export const BELL103_ANSWER: FreqPair = { mark: 2225, space: 2025 };
@@ -36,10 +63,10 @@ function synthesizeFSK(bytes: Uint8Array, pair: FreqPair, ctx: AudioContext): Au
   const sr = ctx.sampleRate;
   const spb = sr / BAUD;
   const bits: number[] = [];
-  // ~400 ms mark preamble so the receiver's ambient-noise EWMA has a chance
-  // to stop tracking upward as soon as the tone arrives, and so an operator
-  // hitting RX slightly late still catches the first data byte.
-  const preBits = Math.ceil(BAUD * 0.4);
+  // Configurable mark preamble so the receiver's ambient-noise EWMA has a
+  // chance to stop tracking upward as soon as the tone arrives, and so an
+  // operator hitting RX slightly late still catches the first data byte.
+  const preBits = Math.ceil((BAUD * modemConfig.preambleMs) / 1000);
   const postBits = Math.ceil(BAUD * 0.1);
   for (let i = 0; i < preBits; i++) bits.push(1);
   for (const b of bytes) for (const x of byteToFrame(b)) bits.push(x);
@@ -171,20 +198,9 @@ export async function startReceiver(
   // this is a floor even in a dead-quiet room so electronic hiss doesn't
   // produce bits. Empirically ~winSize × 1e-5 on a ±1 float PCM signal is
   // well below real carrier and well above a quiet mic.
-  const ABS_ENERGY_FLOOR = winSize * 1e-6;
-  // Tone bin must dominate the other by this ratio for a detection to count.
-  // A clean Bell 103 signal gives ratios in the 20–200× range; 1.35× keeps
-  // us above noise-driven near-ties but is forgiving of real-world acoustic
-  // coupling (room echo, partial mic bandwidth, speaker colouration).
-  const BIN_RATIO = 1.35;
-  // If the winning bin dominates the other by at least this much, we treat
-  // it as a confident detection even when total energy is only modestly
-  // above the noise floor. This helps pick up quiet-but-clean tones from
-  // device-to-device acoustic coupling.
-  const STRONG_BIN_RATIO = 4.0;
-  // Window energy must be this many times the tracked noise floor (unless
-  // STRONG_BIN_RATIO trips).
-  const SNR_FACTOR = 1.8;
+  // Thresholds are read from `modemConfig` on every call so the settings
+  // dialog can change them without restarting the mic.
+  const absFloor = () => winSize * modemConfig.absEnergyScale;
 
   type Detection = { bit: 0 | 1; ok: boolean };
   const detectAt = (centerIdx: number): Detection => {
@@ -194,10 +210,10 @@ export async function startReceiver(
     const big = em > es ? em : es;
     const small = em > es ? es : em;
     const bit: 0 | 1 = em > es ? 1 : 0;
-    if (energy <= ABS_ENERGY_FLOOR) return { bit, ok: false };
-    const strong = energy > noiseFloor * SNR_FACTOR;
-    const dominant = big > small * BIN_RATIO;
-    const veryDominant = big > small * STRONG_BIN_RATIO;
+    if (energy <= absFloor()) return { bit, ok: false };
+    const strong = energy > noiseFloor * modemConfig.snrFactor;
+    const dominant = big > small * modemConfig.binRatio;
+    const veryDominant = big > small * modemConfig.strongBinRatio;
     // Accept if: (energy above SNR floor AND bins separable) OR
     // (tone is clearly one frequency even without much SNR headroom).
     return { bit, ok: (strong && dominant) || veryDominant };
@@ -254,9 +270,9 @@ export async function startReceiver(
     const ratio = big / small;
     const snr = energy / Math.max(1e-12, noiseFloor);
     const wouldPass =
-      energy > ABS_ENERGY_FLOOR &&
-      ((energy > noiseFloor * SNR_FACTOR && ratio > BIN_RATIO) ||
-        ratio > STRONG_BIN_RATIO);
+      energy > absFloor() &&
+      ((energy > noiseFloor * modemConfig.snrFactor && ratio > modemConfig.binRatio) ||
+        ratio > modemConfig.strongBinRatio);
     // eslint-disable-next-line no-console
     console.log(
       `[kl43/modem] cb=${cbCount} peak=${cbPeak.toFixed(3)} ` +
@@ -322,7 +338,7 @@ export async function startReceiver(
         // carrier collapse (energy below the absolute floor) aborts —
         // transient dips in ratio or SNR must not cost us a byte.
         const energy = windowEnergy(nextTarget);
-        if (energy < ABS_ENERGY_FLOOR) {
+        if (energy < absFloor()) {
           state = "IDLE";
           lastIdle = 1;
           continue;
@@ -335,7 +351,7 @@ export async function startReceiver(
           // ratio is near 1 at mid-start, it was a noise glitch.
           const big = em > es ? em : es;
           const small = em > es ? es : em;
-          if (bit !== 0 || big <= small * BIN_RATIO) {
+          if (bit !== 0 || big <= small * modemConfig.binRatio) {
             state = "IDLE";
             lastIdle = bit;
             continue;

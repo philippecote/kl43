@@ -186,6 +186,46 @@ body {
 }
 
 /* Cipher picker — radio list inside the shared keygen-panel chrome. */
+.modem-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 4px 0 0;
+}
+
+.modem-form .knob {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  align-items: center;
+}
+
+.modem-form .knob-label {
+  color: #d6d6d0;
+  font-size: 13px;
+}
+
+.modem-form .knob-value {
+  color: #e8e8dc;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  min-width: 5ch;
+  text-align: right;
+}
+
+.modem-form .knob input[type="range"] {
+  grid-column: 1 / -1;
+  width: 100%;
+  accent-color: #b4dc8c;
+}
+
+.modem-form .knob-help {
+  grid-column: 1 / -1;
+  color: #9a9a8e;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .cipher-form {
   display: flex;
   flex-direction: column;
