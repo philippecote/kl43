@@ -8,7 +8,68 @@ import type { DualBuffer } from "../editor/DualBuffer.js";
 import type { Clock } from "../state/Clock.js";
 import { formatClockLines } from "../state/Clock.js";
 import { MAIN_MENU_ITEMS, STRINGS, type LcdScreen } from "../ui/STRINGS.js";
-import type { State } from "./Machine.js";
+import { BAUD_RATES, type State } from "./Machine.js";
+
+const LCD_COLS = 40;
+
+/**
+ * Compose a two-column LCD line: `left` flushed left, `right` flushed right,
+ * spaces filling the gap to hit `width` exactly. If the combined length
+ * already exceeds `width`, the result is truncated from the right — callers
+ * should size their inputs so that doesn't happen.
+ */
+function padTwoCol(left: string, right: string, width = LCD_COLS): string {
+  if (right === "") return left.padEnd(width).slice(0, width);
+  const gap = Math.max(1, width - left.length - right.length);
+  return (left + " ".repeat(gap) + right).slice(0, width);
+}
+
+/**
+ * Compact slot descriptor for the Key Select grid: "NN-NAME-UU" with no
+ * spaces around the hyphens so two columns + the indicator column fit in 40
+ * chars. Manual p.5/8 depicts "NN - NAME-UU" but that's manual typesetting —
+ * a 2-row × 2-col grid + "^ or v" indicator only fits at 16 chars/slot.
+ */
+function formatCompactSlot(id: number, c: Compartment | null): string {
+  const nn = id.toString().padStart(2, "0");
+  if (!c) return `${nn}-AVAILABLE-00`;
+  const uu = c.updateLevel.toString().padStart(2, "0");
+  return `${nn}-${c.name}-${uu}`;
+}
+
+/**
+ * Compose a two-column screen: `base` on the left, `indicator` flushed right.
+ * Used for the many selector screens that share the same pattern — message
+ * selector ("Select / Message to Use"), comms selectors ("Select / Function"),
+ * quiet mode, main menu, etc.
+ */
+function twoColScreen(base: LcdScreen, indicator: LcdScreen): LcdScreen {
+  const b1 = base[0] ?? "";
+  const b2 = base.length === 2 ? base[1]! : "";
+  const i1 = indicator[0] ?? "";
+  const i2 = indicator.length === 2 ? indicator[1]! : "";
+  return [padTwoCol(b1, i1), padTwoCol(b2, i2)];
+}
+
+/** MANUAL p.27: "19.2K" replaces "19200"; others render verbatim. */
+function baudLabel(rate: number): string {
+  return rate === 19200 ? "19.2K" : String(rate);
+}
+
+/** MANUAL p.29/37: "{RATE} Baud   ^ or v to Select Speed / Press ENTER at Desired Speed". */
+function baudSelectScreen(baudIndex: number): LcdScreen {
+  const rate = BAUD_RATES[baudIndex] ?? BAUD_RATES[0]!;
+  const [line1, line2] = STRINGS.comms_baud_prompt.screen;
+  return [line1!.replace("{RATE}", baudLabel(rate)), line2!];
+}
+
+/** MANUAL p.11: A/B message selector with "Select / Message to Use" indicator. */
+function messageSelectorScreen(): LcdScreen {
+  return twoColScreen(
+    STRINGS.wp_message_selector.screen,
+    STRINGS.wp_message_selector_indicator.screen,
+  );
+}
 
 /**
  * Format the "{NN}-{NAME}-{UU}" line used by the Encrypt/Decrypt/Update/Auth
@@ -20,26 +81,6 @@ function formatKeyHeader(c: Compartment | null): string {
   const id = c.id.toString().padStart(2, "0");
   const uu = c.updateLevel.toString().padStart(2, "0");
   return `${id}-${c.name}-${uu}`;
-}
-
-const LCD_COLS = 40;
-
-/**
- * Compose a 2x40 screen from a base (left column, left-aligned) and an
- * indicator (right column, right-aligned). Both rows are padded to exactly
- * LCD_COLS characters. If a row's left+right content overflows 40 chars it
- * is truncated on the right; callers should avoid that case.
- */
-function twoColScreen(base: LcdScreen, indicator: LcdScreen): LcdScreen {
-  const pad = (left: string, right: string): string => {
-    if (left.length + right.length >= LCD_COLS) {
-      return (left + right).slice(0, LCD_COLS);
-    }
-    return left + " ".repeat(LCD_COLS - left.length - right.length) + right;
-  };
-  const baseRow2 = base.length === 2 ? base[1]! : "";
-  const indRow2 = indicator.length === 2 ? indicator[1]! : "";
-  return [pad(base[0]!, indicator[0]!), pad(baseRow2, indRow2)];
 }
 
 export function renderScreen(
@@ -63,30 +104,38 @@ export function renderScreen(
       return STRINGS.boot_trw_banner.screen;
 
     case "KEY_SELECT": {
+      // MANUAL p.5/8: "Four positions are displayed at a time." 2×2 grid of
+      // slots on the left, "^ or v" / "ID#" indicator column on the right.
       const slots = store.list();
       const top = state.topSlot;
-      const bottom = top + 1;
-      const row1 = formatSlotLine(top, slots[top - 1] ?? null);
-      const row2 = bottom <= 16 ? formatSlotLine(bottom, slots[bottom - 1] ?? null) : "";
-      return [row1, row2];
+      const pad = (n: number) => formatCompactSlot(n, slots[n - 1] ?? null).padEnd(16);
+      const [ind1, ind2] = STRINGS.key_select_header_indicator.screen;
+      const left1 = `${pad(top)} ${pad(top + 1)}`;
+      const left2 = `${pad(top + 2)} ${pad(top + 3)}`;
+      return [padTwoCol(left1, ind1), padTwoCol(left2, ind2 ?? "")];
     }
 
     case "MAIN_MENU": {
+      // MANUAL p.9: left column shows two menu items; right column shows
+      // "^ or v or" / "Select Function" scroll hint.
       const a = MAIN_MENU_ITEMS[state.topIndex]!;
       const b = MAIN_MENU_ITEMS[state.topIndex + 1];
-      const row1 = `${a.key} - ${a.label.toUpperCase()}`;
-      const row2 = b ? `${b.key} - ${b.label.toUpperCase()}` : "";
-      return [row1, row2];
+      const [ind1, ind2] = STRINGS.main_menu_indicator.screen;
+      const left1 = `${a.key} - ${a.label.toUpperCase()}`;
+      const left2 = b ? `${b.key} - ${b.label.toUpperCase()}` : "";
+      return [padTwoCol(left1, ind1), padTwoCol(left2, ind2 ?? "")];
     }
 
     case "POWER_OFF_CONFIRM":
       return STRINGS.power_off_confirm.screen;
 
     case "QUIET_MENU": {
-      // "[On]" follows whichever mode is currently active.
+      // "[On]" follows whichever mode is currently active. MANUAL p.40 shows
+      // "Select" / "Function" in the right-column indicator.
       const silentMark = silent ? " [On]" : "";
       const normalMark = silent ? "" : " [On]";
-      return [`S - Silent Mode${silentMark}`, `N - Normal Mode${normalMark}`];
+      const base: LcdScreen = [`S - Silent Mode${silentMark}`, `N - Normal Mode${normalMark}`];
+      return twoColScreen(base, STRINGS.quiet_menu_indicator.screen);
     }
 
     case "ZEROIZE_PROMPT":
@@ -114,7 +163,7 @@ export function renderScreen(
       return [`${state.letter} - ${state.label.toUpperCase()}`, "(not yet implemented)"];
 
     case "WP_SELECT_SLOT":
-      return STRINGS.wp_message_selector.screen;
+      return messageSelectorScreen();
 
     case "WP_CLEAR_CONFIRM":
       return STRINGS.wp_clear_prompt.screen;
@@ -139,11 +188,28 @@ export function renderScreen(
       // Render the two display lines nearest the cursor. TextBuffer.layout()
       // returns all lines; we pick a 2-line window around cursorRow.
       const buf = buffers.get(state.slot).buffer;
-      const { lines, cursorRow } = buf.layout();
+      const { lines, cursorRow, cursorCol } = buf.layout();
       const row1Idx = Math.max(0, cursorRow - (cursorRow >= lines.length - 1 ? 1 : 0));
-      const row1 = lines[row1Idx] ?? "";
-      const row2 = lines[row1Idx + 1] ?? "";
-      return [row1.replace(/\n$/, ""), row2.replace(/\n$/, "")];
+      const row1 = (lines[row1Idx] ?? "").replace(/\n$/, "");
+      const row2 = (lines[row1Idx + 1] ?? "").replace(/\n$/, "");
+      // Overlay a "_" cursor in the cell at cursorCol on whichever of the two
+      // visible rows holds the cursor. When the cursor sits past the last
+      // char on a line, pad with spaces so the underscore lands in the right
+      // column (mirrors real hardware underscore cursor).
+      const overlay = (row: string): string => {
+        const padded = row.length < cursorCol ? row.padEnd(cursorCol, " ") : row;
+        return padded.slice(0, cursorCol) + "_" + padded.slice(cursorCol + 1);
+      };
+      const out1 = cursorRow === row1Idx ? overlay(row1) : row1;
+      const out2 = cursorRow === row1Idx + 1 ? overlay(row2) : row2;
+      return [out1, out2];
+    }
+
+    case "WP_SEARCH": {
+      const prompt = STRINGS.wp_search_prompt.screen[0]!;
+      const line1 = `${prompt} ${state.term}`;
+      const line2 = state.notFound ? STRINGS.wp_search_not_found.screen[1]! : "";
+      return [line1, line2];
     }
 
     case "WP_STORED":
@@ -151,7 +217,7 @@ export function renderScreen(
 
     // ───────── Encrypt flow ─────────
     case "E_SELECT_SLOT":
-      return STRINGS.wp_message_selector.screen;
+      return messageSelectorScreen();
 
     case "E_CONFIRM_KEY":
       return [
@@ -167,7 +233,7 @@ export function renderScreen(
 
     // ───────── Decrypt flow ─────────
     case "D_SELECT_SLOT":
-      return STRINGS.wp_message_selector.screen;
+      return messageSelectorScreen();
 
     case "D_CONFIRM_KEY":
       return [
@@ -202,6 +268,9 @@ export function renderScreen(
         formatKeyHeader(store.selected()),
         STRINGS.key_after_update.screen[1]!,
       ];
+
+    case "U_MAX_REACHED":
+      return STRINGS.key_update_limit.screen;
 
     // ───────── Authentication flow ─────────
     case "A_CONFIRM_KEY":
@@ -272,7 +341,7 @@ export function renderScreen(
 
     // ───────── Review Message (R menu) ─────────
     case "R_SELECT_SLOT":
-      return STRINGS.wp_message_selector.screen;
+      return messageSelectorScreen();
 
     case "R_VIEWER": {
       if (!buffers) return [""];
@@ -291,7 +360,7 @@ export function renderScreen(
 
     // ───────── Print (P menu) ─────────
     case "P_SELECT_SLOT":
-      return STRINGS.wp_message_selector.screen;
+      return messageSelectorScreen();
 
     case "P_WARN_PLAIN":
       return STRINGS.print_plain_warning.screen;
@@ -304,10 +373,16 @@ export function renderScreen(
 
     // ───────── Communications (C menu) ─────────
     case "C_MODE_SELECT":
-      return STRINGS.comms_audio_or_digital.screen;
+      return twoColScreen(
+        STRINGS.comms_audio_or_digital.screen,
+        STRINGS.comms_select_function_indicator.screen,
+      );
 
     case "C_DIR_SELECT":
-      return STRINGS.comms_xmit_or_recv.screen;
+      return twoColScreen(
+        STRINGS.comms_xmit_or_recv.screen,
+        STRINGS.comms_select_function_indicator.screen,
+      );
 
     case "C_AUDIO_SUBMODE":
       return twoColScreen(
@@ -321,8 +396,18 @@ export function renderScreen(
         STRINGS.comms_select_function_indicator.screen,
       );
 
+    case "C_AUDIO_DENIED":
+      return STRINGS.warn_quiet_audio.screen;
+
     case "C_TX_SLOT_SELECT":
-      return STRINGS.wp_message_selector.screen;
+      return messageSelectorScreen();
+
+    case "C_TX_BAUD_SELECT":
+    case "C_RX_BAUD_SELECT":
+      return baudSelectScreen(state.baudIndex);
+
+    case "C_TX_PLEASE_WAIT":
+      return STRINGS.comms_please_wait.screen;
 
     case "C_TX_READY":
       return STRINGS.comms_ready_prompt.screen;

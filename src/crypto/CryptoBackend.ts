@@ -1,40 +1,69 @@
-// Abstraction over the block-cipher-in-CBC-mode used by the KL-43C protocol.
-// The real device uses a classified SAVILLE-family algorithm. The canonical
-// substitute is 56-bit DES (matching the Datotek XMP-500 export variant).
-// 3DES or AES-128 backends can replace DesBackend without affecting upper
-// layers — the protocol is agnostic to block size beyond "small enough to
-// fit inside a 300-baud frame budget."
+// Abstraction over the symmetric cipher used by the KL-43C protocol.
+// See KL43_emulator_spec_addendum_A_cipher.md for the design decision.
 //
-// Keys are always derived from the 120-bit K_raw (see KeyCodec.ts).
-// Derivation is backend-specific so that a 56-bit or 128-bit backend each
-// pulls the right number of bits from the same master key material.
+// The real device runs a classified SAVILLE-family algorithm. We ship three
+// runtime-selectable stand-ins, all consuming the same 15-byte K_raw and
+// 12-char MI:
+//
+//   - lfsr-nlc  — SAVILLE-shaped LFSR nonlinear combiner (default, most
+//                 architecturally faithful: stream cipher, irregular
+//                 clocking, Geffe-style combiner)
+//   - aes-ctr   — AES-128-CTR, operationally equivalent, cryptographically
+//                 strong, useful for interop / sanity-check
+//   - des-cbc   — DES-56-CBC, historical XMP-500 export mode
+//
+// Interface shape (addendum A.2): `init(kRaw, mi) → CryptoStream`, and the
+// stream does a single whole-buffer `transform(input, mode)` per message.
+// Stream ciphers (LFSR, AES-CTR) ignore `mode` since encrypt = decrypt; DES
+// honours it because CBC is direction-asymmetric.
+//
+// Keeping the call synchronous: the Machine's `press()` returns `Effect[]`
+// synchronously and splitting it into start/complete states would be a
+// massive refactor. We avoid WebCrypto (async-only) for AES and use a
+// pure-JS implementation instead.
+//
+// The backend owns its own key/IV/nonce derivation from K_raw and MI. The
+// upper layer (EncryptedMessage) just hands over the raw material.
 
 import { K_RAW_LENGTH } from "./KeyCodec.js";
+import { MI_TOTAL_LENGTH } from "./Mi.js";
+
+export type BackendId = "lfsr-nlc" | "aes-ctr" | "des-cbc";
 
 export interface CryptoBackend {
-  /** Human-readable tag: "DES-CBC", "3DES-CBC", "AES-128-CBC". */
-  readonly algorithm: string;
-  /** Block size in bytes. DES: 8, AES: 16. */
-  readonly blockBytes: number;
-  /** IV size in bytes (always equal to blockBytes for CBC). */
-  readonly ivBytes: number;
-
+  readonly id: BackendId;
+  /** Short human-readable label, shown in the picker UI. */
+  readonly label: string;
+  /** One-line rationale, shown under the radio button. */
+  readonly description: string;
   /**
-   * Derive the session key used by this backend from 15 bytes of raw key
-   * material. Derivation is deterministic; same K_raw + same backend →
-   * same session key.
+   * Initialize a stream with a 15-byte K_raw and a 12-char MI. The returned
+   * stream is single-use: call `transform` exactly once with the whole
+   * message buffer.
    */
-  deriveSessionKey(kRaw: Uint8Array): Uint8Array;
+  init(kRaw: Uint8Array, mi: string): CryptoStream;
+}
 
-  /** CBC-encrypt with PKCS#7 padding. */
-  encrypt(sessionKey: Uint8Array, iv: Uint8Array, plaintext: Uint8Array): Uint8Array;
-
-  /** CBC-decrypt with PKCS#7 unpadding. Throws on bad padding. */
-  decrypt(sessionKey: Uint8Array, iv: Uint8Array, ciphertext: Uint8Array): Uint8Array;
+export interface CryptoStream {
+  transform(input: Uint8Array, mode: "encrypt" | "decrypt"): Uint8Array;
 }
 
 export function assertKRawShape(kRaw: Uint8Array): void {
   if (kRaw.length !== K_RAW_LENGTH) {
     throw new RangeError(`K_raw must be ${K_RAW_LENGTH} bytes, got ${kRaw.length}`);
   }
+}
+
+export function assertMiShape(mi: string): void {
+  if (mi.length !== MI_TOTAL_LENGTH) {
+    throw new RangeError(`MI must be ${MI_TOTAL_LENGTH} letters, got ${mi.length}`);
+  }
+  if (!/^[A-Z]+$/.test(mi)) {
+    throw new RangeError(`MI must be uppercase A-Z, got ${JSON.stringify(mi)}`);
+  }
+}
+
+export function miToBytes(mi: string): Uint8Array {
+  assertMiShape(mi);
+  return new TextEncoder().encode(mi);
 }

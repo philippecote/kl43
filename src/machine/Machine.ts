@@ -29,7 +29,7 @@ import {
 } from "../editor/DualBuffer.js";
 import { Clock, SystemClock } from "../state/Clock.js";
 import { CryptoBackend } from "../crypto/CryptoBackend.js";
-import { DesBackend } from "../crypto/DesBackend.js";
+import { LfsrNlcBackend } from "../crypto/backends/LfsrNlcBackend.js";
 import { randomBytes } from "../crypto/primitives.js";
 import {
   encryptMessage,
@@ -67,8 +67,20 @@ export const PRINT_BUSY_MS = 1_000;
 export const TX_BUSY_MS = 1_000;
 /** Receive "busy" dwell once carrier is detected. */
 export const RX_BUSY_MS = 1_000;
+/** "Please Wait" dwell between baud select and C_TX_READY (MANUAL p.29). */
+export const PLEASE_WAIT_MS = 500;
 /** View-angle range [0, VIEW_ANGLE_MAX]. 0 = top view, MAX = bottom view. */
 export const VIEW_ANGLE_MAX = 7;
+
+/**
+ * Digital Data baud rates selectable by the operator (MANUAL p.27).
+ * Only baud rate is selectable; framing is always 1/8/2/none.
+ */
+export const BAUD_RATES: readonly number[] = [
+  50, 75, 150, 300, 600, 1200, 2400, 4800, 9600, 19200,
+] as const;
+/** Default baud rate index = 1200, a typical field default. */
+export const DEFAULT_BAUD_INDEX = 5;
 
 /**
  * Clock edit fields, in the order the operator cycles through them. Widths
@@ -136,7 +148,7 @@ export type State =
   | { kind: "BOOT_CONFIRM"; remainingMs: number }
   | { kind: "BOOT_ZRO_CONFIRM" }       // ZRO pressed during BOOT_CONFIRM → confirm zeroize-all
   | { kind: "BANNER"; remainingMs: number }
-  | { kind: "KEY_SELECT"; topSlot: number } // 2-row window over 16 slots
+  | { kind: "KEY_SELECT"; topSlot: number; idBuf: string } // idBuf: 0-2 digit buffer for ID# shortcut (MANUAL p.8)
   | { kind: "MAIN_MENU"; topIndex: number } // 2-row window over 13 items
   | { kind: "POWER_OFF_CONFIRM" }
   | { kind: "QUIET_MENU" }
@@ -151,6 +163,7 @@ export type State =
   | { kind: "WP_MODE_SELECT"; slot: SlotId }
   | { kind: "WP_CLASSIFICATION"; slot: SlotId; text: string }
   | { kind: "WP_EDITOR"; slot: SlotId; mode: "PLAIN" | "CIPHER" }
+  | { kind: "WP_SEARCH"; slot: SlotId; mode: "PLAIN" | "CIPHER"; term: string; notFound: boolean }
   | { kind: "WP_STORED"; slot: SlotId; remainingMs: number }
   // Encrypt / Decrypt (MANUAL pp.17-20)
   | { kind: "E_SELECT_SLOT" }
@@ -167,6 +180,7 @@ export type State =
   | { kind: "U_CONFIRM2" }
   | { kind: "U_COMPLETE"; remainingMs: number }
   | { kind: "U_POST" }  // "Press ENTER or XIT"
+  | { kind: "U_MAX_REACHED" }  // Attempted update past MAX_UPDATE_LEVEL; latch until any key.
   // Authentication (MANUAL pp.41-42)
   | { kind: "A_CONFIRM_KEY" }
   | { kind: "A_CHALLENGE_OR_REPLY" }
@@ -202,7 +216,12 @@ export type State =
   // acoustic/connector and U.S./European prompts can route correctly.
   | { kind: "C_AUDIO_SUBMODE"; dir: "TX" | "RX" }
   | { kind: "C_ACOUSTIC_LINES"; dir: "TX" | "RX" }
+  // Silent Mode denies acoustic-coupler comms (MANUAL p.39; Appendix B p.53).
+  | { kind: "C_AUDIO_DENIED" }
   | { kind: "C_TX_SLOT_SELECT"; mode: "AUDIO" | "DIGITAL" }
+  | { kind: "C_TX_BAUD_SELECT"; slot: SlotId; baudIndex: number }  // DIGITAL TX, MANUAL p.29
+  | { kind: "C_TX_PLEASE_WAIT"; slot: SlotId; baudIndex: number; remainingMs: number }
+  | { kind: "C_RX_BAUD_SELECT"; baudIndex: number }  // DIGITAL RX, MANUAL p.37
   | { kind: "C_TX_READY"; slot: SlotId; mode: "AUDIO" | "DIGITAL" }
   | { kind: "C_TX_BUSY"; slot: SlotId; mode: "AUDIO" | "DIGITAL"; remainingMs: number }
   | { kind: "C_TX_COMPLETE"; slot: SlotId; mode: "AUDIO" | "DIGITAL" }
@@ -252,7 +271,7 @@ export function defaultDeps(overrides: Partial<MachineDeps> = {}): MachineDeps {
   return {
     keyStore: overrides.keyStore ?? new KeyCompartmentStore(),
     buffers: overrides.buffers ?? new DualBuffer(),
-    backend: overrides.backend ?? new DesBackend(),
+    backend: overrides.backend ?? new LfsrNlcBackend(),
     clock: overrides.clock ?? new SystemClock(),
     random: overrides.random ?? randomBytes,
     silent: overrides.silent ?? false,
@@ -301,6 +320,7 @@ export class Machine {
     const k = this._state.kind;
     const typingStates: ReadonlySet<State["kind"]> = new Set([
       "WP_EDITOR",
+      "WP_SEARCH",
       "WP_CLASSIFICATION",
       "A_ENTER_CHALLENGE",
       "K_PROMPT_NAME",
@@ -335,7 +355,7 @@ export class Machine {
     if (s.kind === "BANNER") {
       const rem = s.remainingMs - elapsedMs;
       if (rem <= 0) {
-        this._state = { kind: "KEY_SELECT", topSlot: 1 };
+        this._state = { kind: "KEY_SELECT", topSlot: 1, idBuf: "" };
         return [];
       }
       this._state = { kind: "BANNER", remainingMs: rem };
@@ -344,7 +364,7 @@ export class Machine {
     if (s.kind === "ZEROING") {
       const rem = s.remainingMs - elapsedMs;
       if (rem <= 0) {
-        this._state = { kind: "KEY_SELECT", topSlot: 1 };
+        this._state = { kind: "KEY_SELECT", topSlot: 1, idBuf: "" };
         return [];
       }
       this._state = { kind: "ZEROING", remainingMs: rem };
@@ -417,6 +437,15 @@ export class Machine {
       this._state = { kind: "C_TX_BUSY", slot: s.slot, mode: s.mode, remainingMs: rem };
       return [];
     }
+    if (s.kind === "C_TX_PLEASE_WAIT") {
+      const rem = s.remainingMs - elapsedMs;
+      if (rem <= 0) {
+        this._state = { kind: "C_TX_READY", slot: s.slot, mode: "DIGITAL" };
+        return [];
+      }
+      this._state = { ...s, remainingMs: rem };
+      return [];
+    }
     if (s.kind === "C_RX_BUSY") {
       const rem = s.remainingMs - elapsedMs;
       if (rem <= 0) {
@@ -449,7 +478,7 @@ export class Machine {
       const clkBlocked: ReadonlySet<State["kind"]> = new Set([
         "OFF", "BOOT_CONFIRM", "BOOT_ZRO_CONFIRM", "BANNER",
         "E_BUSY", "D_BUSY", "C_TX_BUSY", "C_RX_BUSY", "C_TX_COMPLETE",
-        "C_RX_COMPLETE", "P_BUSY", "ZEROING", "MALFUNCTION",
+        "C_RX_COMPLETE", "C_TX_PLEASE_WAIT", "P_BUSY", "ZEROING", "MALFUNCTION",
         "CLOCK_VIEW", "CLOCK_EDIT",
       ]);
       if (!clkBlocked.has(s.kind)) {
@@ -500,19 +529,40 @@ export class Machine {
 
     if (s.kind === "BANNER") {
       // Any key during banner skips it to the key select menu.
-      this._state = { kind: "KEY_SELECT", topSlot: 1 };
+      this._state = { kind: "KEY_SELECT", topSlot: 1, idBuf: "" };
       return [];
     }
 
     if (s.kind === "KEY_SELECT") {
+      // MANUAL p.8: "Select the loaded key by typing in the appropriate key
+      // identification number." Two-digit ID# buffer — accumulates until two
+      // digits are seen, then tries to select the corresponding loaded slot.
+      if (event.kind === "char" && /^[0-9]$/.test(event.ch)) {
+        const newBuf = s.idBuf + event.ch;
+        if (newBuf.length < 2) {
+          this._state = { kind: "KEY_SELECT", topSlot: s.topSlot, idBuf: newBuf };
+          return [];
+        }
+        const n = parseInt(newBuf, 10);
+        const loaded = n >= 1 && n <= 16 ? this.deps.keyStore.peek(n) : null;
+        if (loaded) {
+          this.deps.keyStore.select(n);
+          this._state = { kind: "MAIN_MENU", topIndex: 0 };
+          return [];
+        }
+        // Invalid (00/>16) or unloaded slot: drop buffer, stay put.
+        this._state = { kind: "KEY_SELECT", topSlot: s.topSlot, idBuf: "" };
+        return [];
+      }
       if (event.kind === "key") {
         if (event.key === "UP") {
-          this._state = { kind: "KEY_SELECT", topSlot: Math.max(1, s.topSlot - 1) };
+          this._state = { kind: "KEY_SELECT", topSlot: Math.max(1, s.topSlot - 1), idBuf: "" };
           return [];
         }
         if (event.key === "DOWN") {
-          // 16 slots, 2-row window → last topSlot is 15.
-          this._state = { kind: "KEY_SELECT", topSlot: Math.min(15, s.topSlot + 1) };
+          // MANUAL p.5/8: 4 slots shown at a time (2×2 grid). Last window is
+          // slots {13,14,15,16} → max topSlot = 13.
+          this._state = { kind: "KEY_SELECT", topSlot: Math.min(13, s.topSlot + 1), idBuf: "" };
           return [];
         }
         if (event.key === "ENTER") {
@@ -548,7 +598,7 @@ export class Machine {
           return [];
         }
         if (event.key === "XIT") {
-          this._state = { kind: "KEY_SELECT", topSlot: 1 };
+          this._state = { kind: "KEY_SELECT", topSlot: 1, idBuf: "" };
           return [];
         }
         if (event.key === "ZRO") {
@@ -730,10 +780,12 @@ export class Machine {
     if (s.kind === "U_CONFIRM2") {
       if (event.kind === "key" && event.key === "Y") {
         const sel = this.deps.keyStore.selected();
-        if (!sel || sel.updateLevel >= MAX_UPDATE_LEVEL) {
-          // Nothing to advance (no key selected or already at the cap).
-          // Return to Main Menu; a production UI would flash an error.
+        if (!sel) {
           this._state = { kind: "MAIN_MENU", topIndex: 0 };
+          return [];
+        }
+        if (sel.updateLevel >= MAX_UPDATE_LEVEL) {
+          this._state = { kind: "U_MAX_REACHED" };
           return [];
         }
         const next = this.deps.keyStore.update(sel.id);
@@ -748,6 +800,12 @@ export class Machine {
     if (s.kind === "U_COMPLETE") return [];
     if (s.kind === "U_POST") {
       if (event.kind === "key" && (event.key === "ENTER" || event.key === "XIT")) {
+        this._state = { kind: "MAIN_MENU", topIndex: 0 };
+      }
+      return [];
+    }
+    if (s.kind === "U_MAX_REACHED") {
+      if (event.kind === "key" || event.kind === "char") {
         this._state = { kind: "MAIN_MENU", topIndex: 0 };
       }
       return [];
@@ -1001,12 +1059,15 @@ export class Machine {
         this._state = { kind: "MAIN_MENU", topIndex: 0 };
         return [{ kind: "viewAngleChanged", level: s.level }];
       }
+      // MANUAL p.47: "the display view angle can also be set to maximum by
+      // … pressing the (^) key at the Key Select Menu." ^ raises level
+      // toward VIEW_ANGLE_MAX; v lowers it.
       if (event.kind === "key" && event.key === "UP") {
-        this._state = { kind: "V_ADJUST", level: Math.max(0, s.level - 1) };
+        this._state = { kind: "V_ADJUST", level: Math.min(VIEW_ANGLE_MAX, s.level + 1) };
         return [];
       }
       if (event.kind === "key" && event.key === "DOWN") {
-        this._state = { kind: "V_ADJUST", level: Math.min(VIEW_ANGLE_MAX, s.level + 1) };
+        this._state = { kind: "V_ADJUST", level: Math.max(0, s.level - 1) };
         return [];
       }
       return [];
@@ -1095,7 +1156,7 @@ export class Machine {
           // `feedReceived` can redirect by passing a slot explicitly.
           this._state = s.mode === "AUDIO"
             ? { kind: "C_AUDIO_SUBMODE", dir: "RX" }
-            : { kind: "C_RX_WAIT", mode: s.mode, slot: "A" };
+            : { kind: "C_RX_BAUD_SELECT", baudIndex: DEFAULT_BAUD_INDEX };
         }
       }
       return [];
@@ -1108,13 +1169,28 @@ export class Machine {
       if (event.kind === "char") {
         const ch = event.ch.toUpperCase();
         if (ch === "A") {
+          // MANUAL p.39: Silent Mode disallows acoustic-coupler comms (audio
+          // output via internal speaker). Appendix B p.53 gives the warning.
+          if (this.deps.silent) {
+            this._state = { kind: "C_AUDIO_DENIED" };
+            return [];
+          }
           this._state = { kind: "C_ACOUSTIC_LINES", dir: s.dir };
         } else if (ch === "C") {
           // Connector-audio path skips the U.S./European lines prompt.
+          // Allowed in Silent Mode per p.39 Note: RS-232/423/Connector Audio
+          // may be used regardless of operation mode.
           this._state = s.dir === "TX"
             ? { kind: "C_TX_SLOT_SELECT", mode: "AUDIO" }
             : { kind: "C_RX_WAIT", mode: "AUDIO", slot: "A" };
         }
+      }
+      return [];
+    }
+    if (s.kind === "C_AUDIO_DENIED") {
+      // Any key acknowledges the warning and returns to Main Menu.
+      if (event.kind === "key" || event.kind === "char") {
+        this._state = { kind: "MAIN_MENU", topIndex: 0 };
       }
       return [];
     }
@@ -1153,8 +1229,64 @@ export class Machine {
             this._state = { kind: "MAIN_MENU", topIndex: 0 };
             return [];
           }
-          this._state = { kind: "C_TX_READY", slot, mode: s.mode };
+          // DIGITAL TX inserts baud-select + Please Wait per MANUAL p.28-29.
+          // AUDIO TX skips both (the baud selector is the Digital-only gate).
+          this._state = s.mode === "DIGITAL"
+            ? { kind: "C_TX_BAUD_SELECT", slot, baudIndex: DEFAULT_BAUD_INDEX }
+            : { kind: "C_TX_READY", slot, mode: s.mode };
         }
+      }
+      return [];
+    }
+    if (s.kind === "C_TX_BAUD_SELECT") {
+      if (event.kind === "key" && event.key === "XIT") {
+        this._state = { kind: "C_TX_SLOT_SELECT", mode: "DIGITAL" };
+        return [];
+      }
+      if (event.kind === "key" && event.key === "UP") {
+        const next = Math.min(BAUD_RATES.length - 1, s.baudIndex + 1);
+        this._state = { ...s, baudIndex: next };
+        return [];
+      }
+      if (event.kind === "key" && event.key === "DOWN") {
+        const next = Math.max(0, s.baudIndex - 1);
+        this._state = { ...s, baudIndex: next };
+        return [];
+      }
+      if (event.kind === "key" && event.key === "ENTER") {
+        this._state = {
+          kind: "C_TX_PLEASE_WAIT",
+          slot: s.slot,
+          baudIndex: s.baudIndex,
+          remainingMs: PLEASE_WAIT_MS,
+        };
+      }
+      return [];
+    }
+    if (s.kind === "C_TX_PLEASE_WAIT") {
+      // XIT aborts back to Main Menu; the manual says (XIT) aborts transmission.
+      if (event.kind === "key" && event.key === "XIT") {
+        this._state = { kind: "MAIN_MENU", topIndex: 0 };
+      }
+      return [];
+    }
+    if (s.kind === "C_RX_BAUD_SELECT") {
+      if (event.kind === "key" && event.key === "XIT") {
+        this._state = { kind: "C_DIR_SELECT", mode: "DIGITAL" };
+        return [];
+      }
+      if (event.kind === "key" && event.key === "UP") {
+        const next = Math.min(BAUD_RATES.length - 1, s.baudIndex + 1);
+        this._state = { ...s, baudIndex: next };
+        return [];
+      }
+      if (event.kind === "key" && event.key === "DOWN") {
+        const next = Math.max(0, s.baudIndex - 1);
+        this._state = { ...s, baudIndex: next };
+        return [];
+      }
+      if (event.kind === "key" && event.key === "ENTER") {
+        this._state = { kind: "C_RX_WAIT", mode: "DIGITAL", slot: "A" };
       }
       return [];
     }
@@ -1377,6 +1509,10 @@ export class Machine {
         if (event.key === "EOT")   { buf.moveEot();   return []; }
         if (event.key === "BOL")   { buf.moveBol();   return []; }
         if (event.key === "EOL")   { buf.moveEol();   return []; }
+        if (event.key === "SRCH_ON") {
+          this._state = { kind: "WP_SEARCH", slot: s.slot, mode: s.mode, term: "", notFound: false };
+          return [];
+        }
       }
       if (event.kind === "char") {
         const ch = s.mode === "CIPHER"
@@ -1388,6 +1524,38 @@ export class Machine {
           : (event.ch.length === 1 ? event.ch.toUpperCase() : null);
         if (ch !== null && buf.length < 2600) {
           buf.insertChar(ch);
+        }
+      }
+      return [];
+    }
+
+    if (s.kind === "WP_SEARCH") {
+      const buf = this.deps.buffers.get(s.slot).buffer;
+      if (event.kind === "key") {
+        if (event.key === "XIT") {
+          this._state = { kind: "WP_EDITOR", slot: s.slot, mode: s.mode };
+          return [];
+        }
+        if (event.key === "DCH") {
+          this._state = { ...s, term: s.term.slice(0, -1), notFound: false };
+          return [];
+        }
+        if (event.key === "ENTER") {
+          if (s.term.length === 0) return [];
+          const hit = buf.search(s.term);
+          if (hit) {
+            this._state = { kind: "WP_EDITOR", slot: s.slot, mode: s.mode };
+          } else {
+            this._state = { ...s, notFound: true };
+          }
+          return [];
+        }
+      }
+      if (event.kind === "char") {
+        if (s.term.length >= 20) return [];
+        const ch = event.ch.length === 1 ? event.ch.toUpperCase() : null;
+        if (ch !== null) {
+          this._state = { ...s, term: s.term + ch, notFound: false };
         }
       }
       return [];

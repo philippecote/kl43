@@ -4,7 +4,6 @@ import {
   InvalidMiError,
   MI_BODY_LENGTH,
   MI_TOTAL_LENGTH,
-  deriveIv,
   makeMi,
   miChecksum,
   parseMi,
@@ -112,48 +111,3 @@ describe("makeMi + parseMi", () => {
   });
 });
 
-describe("deriveIv", () => {
-  const sessionKey = new Uint8Array(7).fill(0x77);
-
-  it("is deterministic for the same (MI, sessionKey, ivBytes)", () => {
-    const body = "ABCDEFGHIJ";
-    const mi = body + miChecksum(body);
-    const a = deriveIv(mi, sessionKey, 8);
-    const b = deriveIv(mi, sessionKey, 8);
-    expect(Array.from(a)).toEqual(Array.from(b));
-  });
-
-  it("returns the requested number of bytes", () => {
-    const body = "ABCDEFGHIJ";
-    const mi = body + miChecksum(body);
-    expect(deriveIv(mi, sessionKey, 8).length).toBe(8);
-    expect(deriveIv(mi, sessionKey, 16).length).toBe(16);
-  });
-
-  it("differs when the MI body changes", () => {
-    const mi1 = "ABCDEFGHIJ" + miChecksum("ABCDEFGHIJ");
-    const mi2 = "ZYXWVUTSRQ" + miChecksum("ZYXWVUTSRQ");
-    expect(Array.from(deriveIv(mi1, sessionKey, 8))).not.toEqual(
-      Array.from(deriveIv(mi2, sessionKey, 8)),
-    );
-  });
-
-  it("differs when the session key changes", () => {
-    const body = "ABCDEFGHIJ";
-    const mi = body + miChecksum(body);
-    const iv1 = deriveIv(mi, new Uint8Array(7), 8);
-    const iv2 = deriveIv(mi, new Uint8Array(7).fill(1), 8);
-    expect(Array.from(iv1)).not.toEqual(Array.from(iv2));
-  });
-
-  it("rejects an invalid MI before hashing", () => {
-    expect(() => deriveIv("not a valid mi!", sessionKey, 8)).toThrow(InvalidMiError);
-  });
-
-  it("rejects silly ivBytes values", () => {
-    const body = "ABCDEFGHIJ";
-    const mi = body + miChecksum(body);
-    expect(() => deriveIv(mi, sessionKey, 0)).toThrow(RangeError);
-    expect(() => deriveIv(mi, sessionKey, 33)).toThrow(RangeError);
-  });
-});

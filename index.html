@@ -11,10 +11,26 @@
       <div class="topbar-title">TSEC/KL-43C Emulator</div>
       <nav class="topbar-menu" aria-label="App menu">
         <button id="menu-keygen" type="button">Key Generator</button>
+        <button id="menu-cipher" type="button">Cipher</button>
         <a href="/reference/KL43C_manual_F_19910815.pdf" target="_blank" rel="noopener">Manual</a>
         <a href="/FAITHFULNESS.md" target="_blank" rel="noopener">Faithfulness</a>
       </nav>
     </header>
+    <div id="cipher-dialog" class="keygen-dialog" role="dialog" aria-modal="true" aria-labelledby="cipher-title">
+      <div class="keygen-panel">
+        <div class="keygen-header">
+          <h2 id="cipher-title">Cipher backend</h2>
+          <button id="cipher-close" type="button" aria-label="Close">×</button>
+        </div>
+        <p class="keygen-help">
+          The real KL-43 shipped with the classified SAVILLE algorithm. This
+          emulator lets you pick a substitute. Both stations must select the
+          same backend, key, and update level to round-trip a message.
+        </p>
+        <form id="cipher-form" class="cipher-form"></form>
+        <p id="cipher-status" class="keygen-status"></p>
+      </div>
+    </div>
     <div id="keygen-dialog" class="keygen-dialog" role="dialog" aria-modal="true" aria-labelledby="keygen-title">
       <div class="keygen-panel">
         <div class="keygen-header">

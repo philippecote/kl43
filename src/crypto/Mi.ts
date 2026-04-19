@@ -1,6 +1,7 @@
 // Message Indicator (MI) — the 12-character preamble sent in cleartext
-// with every ciphertext message. The MI carries IV entropy and a checksum
-// that lets the receiver fail fast on typos before attempting decryption.
+// with every ciphertext message. The MI carries entropy for per-message
+// keystream/IV derivation and a checksum that lets the receiver fail fast
+// on typos before attempting decryption.
 //
 // Real KL-43 indicator format is unknown. Substitute (spec §6.4):
 //
@@ -9,7 +10,8 @@
 // - 10-letter random body: 50 bits of CSPRNG entropy encoded A–Z.
 // - 2-letter checksum: deterministic function of the body; lets the receiver
 //   reject MIs with typos before trying to decrypt (cheap integrity check).
-// - IV for CBC: SHA-256(MI_bytes || sessionKey)[:ivBytes].
+// - IV / nonce derivation is the backend's responsibility — each backend
+//   consumes the 12-char MI differently (see addendum A).
 //
 // The MI is transmitted aloud over voice radio and so stays in the A-Z
 // phonetic-friendly alphabet; the ciphertext body that follows uses the
@@ -64,26 +66,6 @@ export function parseMi(mi: string): { body: string; checksum: string } {
     throw new InvalidMiError("BAD HEADER — CHECK KEY/UPDATE");
   }
   return { body, checksum };
-}
-
-/**
- * Derive a CBC IV for this message: SHA-256(MI_bytes || sessionKey)[:ivBytes].
- * Both sender and receiver compute this identically once they agree on the
- * session key and have parsed the MI.
- */
-export function deriveIv(mi: string, sessionKey: Uint8Array, ivBytes: number): Uint8Array {
-  if (ivBytes <= 0 || ivBytes > 32) {
-    throw new RangeError(`ivBytes must be in (0, 32], got ${ivBytes}`);
-  }
-  // parseMi validates shape before we hash; callers that already parsed can
-  // pass through confident, but we double-check here to prevent hashing
-  // garbage into a persistent IV.
-  parseMi(mi);
-  const miBytes = new TextEncoder().encode(mi);
-  const material = new Uint8Array(miBytes.length + sessionKey.length);
-  material.set(miBytes, 0);
-  material.set(sessionKey, miBytes.length);
-  return sha256(material).slice(0, ivBytes);
 }
 
 /**

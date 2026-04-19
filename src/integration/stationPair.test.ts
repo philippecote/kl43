@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import { randomBytes } from "../crypto/primitives.js";
-import { DesBackend } from "../crypto/DesBackend.js";
+import { LfsrNlcBackend } from "../crypto/backends/LfsrNlcBackend.js";
 import { KeyCompartmentStore } from "../state/KeyCompartment.js";
 import { appendChecksum } from "../crypto/KeyCodec.js";
 import {
@@ -20,7 +20,7 @@ import { InvalidMiError } from "../crypto/Mi.js";
 function makeStation(slot: number, name: string, keyLetters: string) {
   const store = new KeyCompartmentStore();
   const compartment = store.load(slot, name, keyLetters);
-  return { store, compartment, backend: new DesBackend() };
+  return { store, compartment, backend: new LfsrNlcBackend() };
 }
 
 // Generate a random valid 32-letter key body — 30 letters + 2-letter

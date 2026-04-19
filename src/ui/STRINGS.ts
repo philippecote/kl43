@@ -156,7 +156,10 @@ export const STRINGS = {
   },
   wp_mode_prompt: {
     id: "wp_mode_prompt",
-    screen: ["P - Plain Text Mode  C - Cipher Text Mode", "Select Editor Mode"],
+    // Manual p.11 prints "P - Plain Text Mode  C - Cipher Text Mode" with two
+    // spaces between items, but that is 41 chars and the LCD is 40. One-space
+    // separation is the only way to fit both items verbatim.
+    screen: ["P - Plain Text Mode C - Cipher Text Mode", "       Select Editor Mode"],
     source: M(11, "Creating a Message"),
   },
   wp_classification_prompt: {
@@ -178,6 +181,11 @@ export const STRINGS = {
     id: "wp_search_prompt",
     screen: ["Search String:"],
     source: M(14, "String Search — up to 20 chars, cursor → end of match"),
+  },
+  wp_search_not_found: {
+    id: "wp_search_not_found",
+    screen: ["Search String:", "NOT FOUND"],
+    source: S("SUBSTITUTE", 14, undefined, "Manual p.14 describes Search but does not quote the not-found indication. Wording reconstructed in the style of Appendix B warnings (all-caps, second line)."),
   },
   wp_stored: {
     id: "wp_stored",
@@ -205,6 +213,11 @@ export const STRINGS = {
     id: "key_after_update",
     screen: ["{NN}-{NAME}-{UU}", "Press ENTER or XIT"],
     source: M(17, "Updating a Key"),
+  },
+  key_update_limit: {
+    id: "key_update_limit",
+    screen: ["KEY UPDATE LIMIT REACHED.", "PRESS A KEY TO CONTINUE."],
+    source: S("SUBSTITUTE", 16, undefined, "Manual p.6 caps UU at 00-35 and p.16 describes the Update Key flow, but neither Chapter 2 nor Appendix B quotes the warning shown when the operator attempts to update an already-maxed key. Wording reconstructed in the style of Appendix B warnings (all-caps, two lines, 'PRESS A KEY TO CONTINUE')."),
   },
 
   // ───────────────────────────────────── Encrypt / Decrypt ─────────────────────────────────────
@@ -246,6 +259,11 @@ export const STRINGS = {
     screen: ["A - Audio Data", "D - Digital Data"],
     source: M(22, "Communications — first-level selector"),
   },
+  comms_select_function_indicator: {
+    id: "comms_select_function_indicator",
+    screen: ["Select", "Function"],
+    source: M(22, "Communications selectors — right-column indicator (p.22/23/36). Manual's Lines screen on p.23 prints 'Message to Use' but every other sub-selector uses 'Function'; treated as transcription error."),
+  },
   comms_acoustic_or_connector: {
     id: "comms_acoustic_or_connector",
     screen: ["A - Acoustic Coupler", "C - Connector Audio"],
@@ -260,11 +278,6 @@ export const STRINGS = {
     id: "comms_us_or_euro_lines",
     screen: ["U - U.S. Lines", "E - European Lines"],
     source: M(23, "Communications — acoustic transmit level"),
-  },
-  comms_select_function_indicator: {
-    id: "comms_select_function_indicator",
-    screen: ["Select", "Function"],
-    source: M(23, "Communications — Audio sub-selector and Lines indicator column. Manual's Lines screen prints 'Message to Use' but every other sub-selector uses 'Function'; treated as transcription error."),
   },
   comms_please_wait: {
     id: "comms_please_wait",

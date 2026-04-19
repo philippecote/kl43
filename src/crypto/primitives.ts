@@ -126,9 +126,9 @@ export function randomBytes(n: number): Uint8Array {
 }
 
 // DES-CBC without padding. Callers are responsible for padding plaintext to
-// a multiple of 8 bytes (we use PKCS#7 in DesBackend). The 7-byte input key
-// is the raw 56-bit DES key; we expand to the 8-byte form des.js expects by
-// inserting a parity bit in each byte's LSB.
+// a multiple of 8 bytes (DesCbcBackend wraps this with PKCS#7). The 7-byte
+// input key is the raw 56-bit DES key; we expand to the 8-byte form des.js
+// expects by inserting a parity bit in each byte's LSB.
 export function desCbcEncrypt(
   key7: Uint8Array,
   iv8: Uint8Array,

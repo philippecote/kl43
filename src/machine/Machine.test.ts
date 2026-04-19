@@ -4,6 +4,7 @@ import {
   CRYPT_BUSY_MS,
   KEY_INVALID_MS,
   Machine,
+  PLEASE_WAIT_MS,
   POWER_ON_CONFIRM_TIMEOUT_MS,
   PRINT_BUSY_MS,
   RX_BUSY_MS,
@@ -17,7 +18,7 @@ import { renderScreen } from "./Screen.js";
 import { KeyCompartmentStore } from "../state/KeyCompartment.js";
 import { DualBuffer } from "../editor/DualBuffer.js";
 import { decodeKey, appendChecksum } from "../crypto/KeyCodec.js";
-import { DesBackend } from "../crypto/DesBackend.js";
+import { LfsrNlcBackend } from "../crypto/backends/LfsrNlcBackend.js";
 import { FakeClock } from "../state/Clock.js";
 import { computeReply } from "../auth/Authentication.js";
 
@@ -48,7 +49,7 @@ function build(opts: {
   const m = new Machine(defaultDeps({
     keyStore: store,
     buffers,
-    backend: new DesBackend(),
+    backend: new LfsrNlcBackend(),
     clock,
     random: fixedRandom(1),
     silent: opts.silent ?? false,
@@ -167,24 +168,29 @@ describe("emergency zeroize at boot (MANUAL p.43)", () => {
 });
 
 describe("Key Select Menu", () => {
-  it("shows the first two slots on entry", () => {
+  it("shows a 2×2 grid of the first four slots + indicator column", () => {
     const { m, store } = build();
     powerOn(m);
     expect(m.state.kind).toBe("KEY_SELECT");
     const [r1, r2] = renderScreen(m.state, store, false);
-    expect(r1).toBe("01 - AVAILABLE");
-    expect(r2).toBe("02 - AVAILABLE");
+    // Each column is 16 chars (15-char "NN-AVAILABLE-00" + 1 pad), separated
+    // by 1 space, then a 1-space gap before the indicator column.
+    expect(r1).toBe("01-AVAILABLE-00  02-AVAILABLE-00  ^ or v");
+    expect(r2).toBe("03-AVAILABLE-00  04-AVAILABLE-00     ID#");
+    expect(r1!.length).toBe(40);
+    expect(r2!.length).toBe(40);
   });
 
-  it("scrolls with UP/DOWN, clamping at 1 and 15", () => {
+  it("scrolls with UP/DOWN, clamping at 1 and 13", () => {
     const { m } = build();
     powerOn(m);
     // Scroll past the top.
     m.press({ kind: "key", key: "UP" });
-    expect(m.state).toEqual({ kind: "KEY_SELECT", topSlot: 1 });
-    // Scroll all the way down — should clamp at topSlot=15 (shows 15, 16).
+    expect(m.state).toEqual({ kind: "KEY_SELECT", topSlot: 1, idBuf: "" });
+    // Scroll all the way down — with a 4-slot window the last topSlot is 13
+    // (shows 13, 14, 15, 16).
     for (let i = 0; i < 100; i++) m.press({ kind: "key", key: "DOWN" });
-    expect(m.state).toEqual({ kind: "KEY_SELECT", topSlot: 15 });
+    expect(m.state).toEqual({ kind: "KEY_SELECT", topSlot: 13, idBuf: "" });
   });
 
   it("ENTER advances from Key Select → Main Menu", () => {
@@ -192,6 +198,37 @@ describe("Key Select Menu", () => {
     powerOn(m);
     m.press({ kind: "key", key: "ENTER" });
     expect(m.state.kind).toBe("MAIN_MENU");
+  });
+
+  it("two-digit ID# selects a loaded key and jumps to Main Menu (MANUAL p.8)", () => {
+    const { m, store } = build();
+    store.load(3, "BRAVO", "A".repeat(32));
+    powerOn(m);
+    m.press({ kind: "char", ch: "0" });
+    expect(m.state).toEqual({ kind: "KEY_SELECT", topSlot: 1, idBuf: "0" });
+    m.press({ kind: "char", ch: "3" });
+    expect(m.state.kind).toBe("MAIN_MENU");
+    expect(store.selected()?.id).toBe(3);
+  });
+
+  it("two-digit ID# on unloaded slot clears buffer and stays put", () => {
+    const { m, store } = build();
+    powerOn(m);
+    m.press({ kind: "char", ch: "0" });
+    m.press({ kind: "char", ch: "5" });
+    expect(m.state).toEqual({ kind: "KEY_SELECT", topSlot: 1, idBuf: "" });
+    expect(store.selected()).toBeNull();
+  });
+
+  it("out-of-range ID# (00 or >16) clears buffer", () => {
+    const { m } = build();
+    powerOn(m);
+    m.press({ kind: "char", ch: "0" });
+    m.press({ kind: "char", ch: "0" });
+    expect(m.state).toEqual({ kind: "KEY_SELECT", topSlot: 1, idBuf: "" });
+    m.press({ kind: "char", ch: "9" });
+    m.press({ kind: "char", ch: "9" });
+    expect(m.state).toEqual({ kind: "KEY_SELECT", topSlot: 1, idBuf: "" });
   });
 });
 
@@ -201,12 +238,15 @@ describe("Main Menu (MANUAL p.9)", () => {
     m.press({ kind: "key", key: "ENTER" });
   }
 
-  it("shows W and Q as the first two items", () => {
+  it("shows W and Q as the first two items with the scroll indicator", () => {
     const { m, store } = build();
     enterMainMenu(m);
     const [r1, r2] = renderScreen(m.state, store, false);
-    expect(r1).toBe("W - WORD PROCESSOR");
-    expect(r2).toBe("Q - QUIET OPERATION");
+    // MANUAL p.9: "^ or v or" / "Select Function" indicator column.
+    expect(r1).toBe("W - WORD PROCESSOR             ^ or v or");
+    expect(r2).toBe("Q - QUIET OPERATION      Select Function");
+    expect(r1!.length).toBe(40);
+    expect(r2!.length).toBe(40);
   });
 
   it("XIT returns to Key Select", () => {
@@ -281,8 +321,11 @@ describe("Quiet Operation (§4.6, MANUAL p.40)", () => {
     m.press({ kind: "char", ch: "Q" });
     expect(m.state.kind).toBe("QUIET_MENU");
     const screen = renderScreen(m.state, store, false);
-    expect(screen[0]).toBe("S - Silent Mode");
-    expect(screen[1]).toBe("N - Normal Mode [On]");
+    // MANUAL p.40: two-col layout with "Select" / "Function" indicator.
+    expect(screen[0]).toBe("S - Silent Mode                   Select");
+    expect(screen[1]).toBe("N - Normal Mode [On]            Function");
+    expect(screen[0]!.length).toBe(40);
+    expect(screen[1]!.length).toBe(40);
   });
 
   it("S → enables silent mode and reports the change", () => {
@@ -437,9 +480,10 @@ describe("Word Processor sub-machine (MANUAL pp.10–14)", () => {
     const { m, store, buffers } = build();
     toWp(m);
     expect(m.state.kind).toBe("WP_SELECT_SLOT");
+    // MANUAL p.11: message selector carries "Select" / "Message to Use" indicator.
     expect(renderScreen(m.state, store, false, buffers)).toEqual([
-      "A - Message A",
-      "B - Message B",
+      "A - Message A                     Select",
+      "B - Message B             Message to Use",
     ]);
   });
 
@@ -553,6 +597,57 @@ describe("Word Processor sub-machine (MANUAL pp.10–14)", () => {
     for (const ch of "HELLO") m.press({ kind: "char", ch });
     m.press({ kind: "key", key: "DCH" });
     expect(buffers.get("A").buffer.toString()).toBe("HELL");
+  });
+
+  it("SRCH in editor opens search prompt; ENTER on hit moves cursor past match and returns to editor", () => {
+    const { m, store, buffers } = build();
+    toWp(m);
+    m.press({ kind: "char", ch: "A" });
+    m.press({ kind: "tick", elapsedMs: 2000 });
+    m.press({ kind: "char", ch: "P" });
+    m.press({ kind: "key", key: "ENTER" });
+    for (const ch of "HELLO WORLD") m.press({ kind: "char", ch });
+    buffers.get("A").buffer.moveBot();
+    m.press({ kind: "key", key: "SRCH_ON" });
+    expect(m.state.kind).toBe("WP_SEARCH");
+    for (const ch of "WORLD") m.press({ kind: "char", ch });
+    expect(renderScreen(m.state, store, false, buffers)).toEqual(["Search String: WORLD", ""]);
+    m.press({ kind: "key", key: "ENTER" });
+    expect(m.state).toEqual({ kind: "WP_EDITOR", slot: "A", mode: "PLAIN" });
+    expect(buffers.get("A").buffer.cursorPosition).toBe("HELLO WORLD".length);
+  });
+
+  it("SRCH not-found shows NOT FOUND and stays in search; XIT returns to editor", () => {
+    const { m, store, buffers } = build();
+    toWp(m);
+    m.press({ kind: "char", ch: "A" });
+    m.press({ kind: "tick", elapsedMs: 2000 });
+    m.press({ kind: "char", ch: "P" });
+    m.press({ kind: "key", key: "ENTER" });
+    for (const ch of "HELLO") m.press({ kind: "char", ch });
+    m.press({ kind: "key", key: "SRCH_ON" });
+    for (const ch of "XYZ") m.press({ kind: "char", ch });
+    m.press({ kind: "key", key: "ENTER" });
+    expect(m.state.kind).toBe("WP_SEARCH");
+    expect((m.state as { notFound: boolean }).notFound).toBe(true);
+    expect(renderScreen(m.state, store, false, buffers)).toEqual(["Search String: XYZ", "NOT FOUND"]);
+    m.press({ kind: "key", key: "XIT" });
+    expect(m.state).toEqual({ kind: "WP_EDITOR", slot: "A", mode: "PLAIN" });
+  });
+
+  it("SRCH DCH trims the term and clears the not-found flag", () => {
+    const { m } = build();
+    toWp(m);
+    m.press({ kind: "char", ch: "A" });
+    m.press({ kind: "tick", elapsedMs: 2000 });
+    m.press({ kind: "char", ch: "P" });
+    m.press({ kind: "key", key: "ENTER" });
+    m.press({ kind: "key", key: "SRCH_ON" });
+    for (const ch of "XY") m.press({ kind: "char", ch });
+    m.press({ kind: "key", key: "ENTER" });
+    expect((m.state as { notFound: boolean }).notFound).toBe(true);
+    m.press({ kind: "key", key: "DCH" });
+    expect(m.state).toEqual({ kind: "WP_SEARCH", slot: "A", mode: "PLAIN", term: "X", notFound: false });
   });
 
   it("XIT from editor shows Stored As Message A, then returns to Main Menu on tick", () => {
@@ -698,6 +793,38 @@ describe("Update Key (MANUAL pp.16-17)", () => {
     b.m.press({ kind: "key", key: "N" });
     expect(b.m.state.kind).toBe("MAIN_MENU");
     expect(b.store.peek(1)?.updateLevel).toBe(0);
+  });
+
+  it("U → Y → Y on a maxed-out key shows the update-limit warning", () => {
+    const b = build();
+    b.store.load(1, "TEST", makeKeyLetters());
+    for (let i = 0; i < 35; i++) b.store.update(1);
+    expect(b.store.peek(1)?.updateLevel).toBe(35);
+    powerOn(b.m);
+    b.m.press({ kind: "key", key: "ENTER" });
+    b.m.press({ kind: "char", ch: "U" });
+    b.m.press({ kind: "key", key: "Y" });
+    const effects = b.m.press({ kind: "key", key: "Y" });
+    expect(b.m.state.kind).toBe("U_MAX_REACHED");
+    expect(effects).toEqual([]);
+    expect(b.store.peek(1)?.updateLevel).toBe(35);
+    const screen = renderScreen(b.m.state, b.store, false, b.buffers, b.clock);
+    expect(screen[0]).toContain("KEY UPDATE LIMIT REACHED");
+    expect(screen[1]).toContain("PRESS A KEY TO CONTINUE");
+  });
+
+  it("any key on U_MAX_REACHED returns to Main Menu", () => {
+    const b = build();
+    b.store.load(1, "TEST", makeKeyLetters());
+    for (let i = 0; i < 35; i++) b.store.update(1);
+    powerOn(b.m);
+    b.m.press({ kind: "key", key: "ENTER" });
+    b.m.press({ kind: "char", ch: "U" });
+    b.m.press({ kind: "key", key: "Y" });
+    b.m.press({ kind: "key", key: "Y" });
+    expect(b.m.state.kind).toBe("U_MAX_REACHED");
+    b.m.press({ kind: "key", key: "XIT" });
+    expect(b.m.state.kind).toBe("MAIN_MENU");
   });
 });
 
@@ -939,21 +1066,23 @@ describe("View Angle (MANUAL p.47)", () => {
     toMenu(b.m);
     b.m.press({ kind: "char", ch: "V" });
     expect(b.m.state).toEqual({ kind: "V_ADJUST", level: 4 });
-    b.m.press({ kind: "key", key: "UP" });
-    b.m.press({ kind: "key", key: "UP" });
+    b.m.press({ kind: "key", key: "DOWN" });
+    b.m.press({ kind: "key", key: "DOWN" });
     expect(b.m.state).toEqual({ kind: "V_ADJUST", level: 2 });
     const effects = b.m.press({ kind: "key", key: "ENTER" });
     expect(effects).toContainEqual({ kind: "viewAngleChanged", level: 2 });
     expect(b.m.state.kind).toBe("MAIN_MENU");
   });
 
-  it("DOWN clamps at VIEW_ANGLE_MAX, UP clamps at 0", () => {
+  // MANUAL p.47: pressing (^) at the Key Select Menu sets the angle to
+  // maximum — so ^ (UP) raises level toward VIEW_ANGLE_MAX.
+  it("UP clamps at VIEW_ANGLE_MAX, DOWN clamps at 0", () => {
     const b = build();
     toMenu(b.m);
     b.m.press({ kind: "char", ch: "V" });
-    for (let i = 0; i < 20; i++) b.m.press({ kind: "key", key: "DOWN" });
-    expect(b.m.state).toEqual({ kind: "V_ADJUST", level: VIEW_ANGLE_MAX });
     for (let i = 0; i < 20; i++) b.m.press({ kind: "key", key: "UP" });
+    expect(b.m.state).toEqual({ kind: "V_ADJUST", level: VIEW_ANGLE_MAX });
+    for (let i = 0; i < 20; i++) b.m.press({ kind: "key", key: "DOWN" });
     expect(b.m.state).toEqual({ kind: "V_ADJUST", level: 0 });
   });
 });
@@ -1129,6 +1258,138 @@ describe("Communications (MANUAL p.22-40)", () => {
     expect(b.m.state).toEqual({ kind: "C_DIR_SELECT", mode: "AUDIO" });
   });
 
+  it("Silent Mode blocks Acoustic Coupler with QUIET OPERATION warning (MANUAL p.39, Appendix B p.53)", () => {
+    const b = build({ silent: true });
+    toMenu(b.m);
+    b.m.press({ kind: "char", ch: "C" });
+    b.m.press({ kind: "char", ch: "A" });
+    b.m.press({ kind: "char", ch: "T" });
+    b.m.press({ kind: "char", ch: "A" }); // Acoustic
+    expect(b.m.state).toEqual({ kind: "C_AUDIO_DENIED" });
+    const screen = renderScreen(b.m.state, b.store, b.m.silent);
+    expect(screen[0]).toBe("QUIET OPERATION: AUDIO OUTPUT DENIED.");
+    // Any key returns to Main Menu.
+    b.m.press({ kind: "key", key: "XIT" });
+    expect(b.m.state.kind).toBe("MAIN_MENU");
+  });
+
+  it("Silent Mode still allows Connector Audio (MANUAL p.39 Note)", () => {
+    const b = build({ silent: true });
+    toMenu(b.m);
+    b.m.press({ kind: "char", ch: "C" });
+    b.m.press({ kind: "char", ch: "A" });
+    b.m.press({ kind: "char", ch: "T" });
+    b.m.press({ kind: "char", ch: "C" }); // Connector
+    expect(b.m.state).toEqual({ kind: "C_TX_SLOT_SELECT", mode: "AUDIO" });
+  });
+
+  it("Silent Mode still allows Digital Data (MANUAL p.39 Note)", () => {
+    const b = build({ silent: true });
+    toMenu(b.m);
+    b.m.press({ kind: "char", ch: "C" });
+    b.m.press({ kind: "char", ch: "D" });
+    b.m.press({ kind: "char", ch: "T" });
+    expect(b.m.state).toEqual({ kind: "C_TX_SLOT_SELECT", mode: "DIGITAL" });
+  });
+
+  it("digital TX: SLOT → baud-select → Please Wait → C_TX_READY (MANUAL p.28-29)", () => {
+    const b = build();
+    b.buffers.get("A").buffer.insertString("HELLO");
+    b.buffers.markEncrypted("A");
+    toMenu(b.m);
+    b.m.press({ kind: "char", ch: "C" });
+    b.m.press({ kind: "char", ch: "D" });
+    b.m.press({ kind: "char", ch: "T" });
+    b.m.press({ kind: "char", ch: "A" });
+    expect(b.m.state).toEqual({ kind: "C_TX_BAUD_SELECT", slot: "A", baudIndex: 5 });
+    // UP raises the baud index; DOWN lowers it; clamp at both ends.
+    b.m.press({ kind: "key", key: "UP" });
+    expect((b.m.state as { baudIndex: number }).baudIndex).toBe(6);
+    b.m.press({ kind: "key", key: "DOWN" });
+    b.m.press({ kind: "key", key: "DOWN" });
+    expect((b.m.state as { baudIndex: number }).baudIndex).toBe(4);
+    b.m.press({ kind: "key", key: "ENTER" });
+    expect(b.m.state.kind).toBe("C_TX_PLEASE_WAIT");
+    b.m.press({ kind: "tick", elapsedMs: PLEASE_WAIT_MS });
+    expect(b.m.state).toEqual({ kind: "C_TX_READY", slot: "A", mode: "DIGITAL" });
+  });
+
+  it("digital TX baud-select renders {RATE} Baud with ^ or v indicator", () => {
+    const b = build();
+    b.buffers.get("A").buffer.insertString("HI");
+    b.buffers.markEncrypted("A");
+    toMenu(b.m);
+    b.m.press({ kind: "char", ch: "C" });
+    b.m.press({ kind: "char", ch: "D" });
+    b.m.press({ kind: "char", ch: "T" });
+    b.m.press({ kind: "char", ch: "A" });
+    const [r1, r2] = renderScreen(b.m.state, b.store, false, b.buffers);
+    expect(r1).toContain("1200 Baud");
+    expect(r1).toContain("^ or v to Select Speed");
+    expect(r2).toContain("Press ENTER at Desired Speed");
+  });
+
+  it("digital TX baud UP from 9600 lands on 19.2K label", () => {
+    const b = build();
+    b.buffers.get("A").buffer.insertString("HI");
+    b.buffers.markEncrypted("A");
+    toMenu(b.m);
+    b.m.press({ kind: "char", ch: "C" });
+    b.m.press({ kind: "char", ch: "D" });
+    b.m.press({ kind: "char", ch: "T" });
+    b.m.press({ kind: "char", ch: "A" });
+    // From default 1200, press UP 4× → 19200.
+    for (let i = 0; i < 4; i++) b.m.press({ kind: "key", key: "UP" });
+    expect((b.m.state as { baudIndex: number }).baudIndex).toBe(9);
+    const [r1] = renderScreen(b.m.state, b.store, false, b.buffers);
+    expect(r1).toContain("19.2K Baud");
+    // Further UP clamps at the top.
+    b.m.press({ kind: "key", key: "UP" });
+    expect((b.m.state as { baudIndex: number }).baudIndex).toBe(9);
+  });
+
+  it("digital TX XIT from baud-select returns to slot select; from Please Wait aborts to Main Menu", () => {
+    const b = build();
+    b.buffers.get("A").buffer.insertString("HI");
+    b.buffers.markEncrypted("A");
+    toMenu(b.m);
+    b.m.press({ kind: "char", ch: "C" });
+    b.m.press({ kind: "char", ch: "D" });
+    b.m.press({ kind: "char", ch: "T" });
+    b.m.press({ kind: "char", ch: "A" });
+    b.m.press({ kind: "key", key: "XIT" });
+    expect(b.m.state).toEqual({ kind: "C_TX_SLOT_SELECT", mode: "DIGITAL" });
+    b.m.press({ kind: "char", ch: "A" });
+    b.m.press({ kind: "key", key: "ENTER" });
+    expect(b.m.state.kind).toBe("C_TX_PLEASE_WAIT");
+    b.m.press({ kind: "key", key: "XIT" });
+    expect(b.m.state.kind).toBe("MAIN_MENU");
+  });
+
+  it("digital RX baud-select XIT returns to C_DIR_SELECT", () => {
+    const b = build();
+    toMenu(b.m);
+    b.m.press({ kind: "char", ch: "C" });
+    b.m.press({ kind: "char", ch: "D" });
+    b.m.press({ kind: "char", ch: "R" });
+    expect(b.m.state.kind).toBe("C_RX_BAUD_SELECT");
+    b.m.press({ kind: "key", key: "XIT" });
+    expect(b.m.state).toEqual({ kind: "C_DIR_SELECT", mode: "DIGITAL" });
+  });
+
+  it("audio TX still skips baud (baud is a Digital-only gate)", () => {
+    const b = build();
+    b.buffers.get("A").buffer.insertString("HI");
+    b.buffers.markEncrypted("A");
+    toMenu(b.m);
+    b.m.press({ kind: "char", ch: "C" });
+    b.m.press({ kind: "char", ch: "A" });
+    b.m.press({ kind: "char", ch: "T" });
+    b.m.press({ kind: "char", ch: "C" }); // connector
+    b.m.press({ kind: "char", ch: "A" });
+    expect(b.m.state).toEqual({ kind: "C_TX_READY", slot: "A", mode: "AUDIO" });
+  });
+
   it("digital path is unchanged by the audio sub-selectors (no submode insertion)", () => {
     const b = build();
     toMenu(b.m);
@@ -1138,12 +1399,15 @@ describe("Communications (MANUAL p.22-40)", () => {
     expect(b.m.state).toEqual({ kind: "C_TX_SLOT_SELECT", mode: "DIGITAL" });
   });
 
-  it("C → D (digital) → R → feedReceived lands bytes and completes", () => {
+  it("C → D (digital) → R → baud select → feedReceived lands bytes and completes", () => {
     const b = build();
     toMenu(b.m);
     b.m.press({ kind: "char", ch: "C" });
     b.m.press({ kind: "char", ch: "D" });
     b.m.press({ kind: "char", ch: "R" });
+    // MANUAL p.37: digital RX routes through the baud-rate selector.
+    expect(b.m.state).toEqual({ kind: "C_RX_BAUD_SELECT", baudIndex: 5 });
+    b.m.press({ kind: "key", key: "ENTER" });
     expect(b.m.state).toEqual({ kind: "C_RX_WAIT", mode: "DIGITAL", slot: "A" });
     b.m.feedReceived("RECEIVED MESSAGE");
     expect(b.m.state.kind).toBe("C_RX_BUSY");

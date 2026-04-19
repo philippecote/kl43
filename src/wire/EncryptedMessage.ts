@@ -11,7 +11,7 @@
 
 import { Compartment } from "../state/KeyCompartment.js";
 import { CryptoBackend } from "../crypto/CryptoBackend.js";
-import { MI_TOTAL_LENGTH, deriveIv, makeMi, parseMi } from "../crypto/Mi.js";
+import { MI_TOTAL_LENGTH, makeMi, parseMi } from "../crypto/Mi.js";
 import { base32Decode, base32Encode, groupForDisplay } from "./Base32.js";
 import { filterToBase32 } from "./Base32.js";
 
@@ -33,15 +33,10 @@ export function encryptMessage(
   randomSource: (n: number) => Uint8Array,
 ): EncryptedMessage {
   const mi = makeMi(randomSource);
-  const sessionKey = backend.deriveSessionKey(compartment.currentKey);
-  try {
-    const iv = deriveIv(mi, sessionKey, backend.ivBytes);
-    const plainBytes = new TextEncoder().encode(plaintext);
-    const cipherBytes = backend.encrypt(sessionKey, iv, plainBytes);
-    return { mi, cipherBase32: base32Encode(cipherBytes) };
-  } finally {
-    sessionKey.fill(0);
-  }
+  const stream = backend.init(compartment.currentKey, mi);
+  const plainBytes = new TextEncoder().encode(plaintext);
+  const cipherBytes = stream.transform(plainBytes, "encrypt");
+  return { mi, cipherBase32: base32Encode(cipherBytes) };
 }
 
 /**
@@ -56,15 +51,10 @@ export function decryptMessage(
   message: EncryptedMessage,
 ): string {
   parseMi(message.mi); // explicit validation up-front
-  const sessionKey = backend.deriveSessionKey(compartment.currentKey);
-  try {
-    const iv = deriveIv(message.mi, sessionKey, backend.ivBytes);
-    const cipherBytes = base32Decode(message.cipherBase32);
-    const plainBytes = backend.decrypt(sessionKey, iv, cipherBytes);
-    return new TextDecoder().decode(plainBytes);
-  } finally {
-    sessionKey.fill(0);
-  }
+  const stream = backend.init(compartment.currentKey, message.mi);
+  const cipherBytes = base32Decode(message.cipherBase32);
+  const plainBytes = stream.transform(cipherBytes, "decrypt");
+  return new TextDecoder().decode(plainBytes);
 }
 
 /**

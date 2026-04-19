@@ -10,7 +10,7 @@ import { Machine, defaultDeps, type KeyEvent, type Effect } from "../machine/Mac
 import { renderScreen } from "../machine/Screen.js";
 import { paintLcd } from "./lcd.js";
 import { buildKeypad, enableCalibration, keyEventFor } from "./keypad.js";
-import { playKeyClick, playConfirm, playError, playPowerOff, unlockAudio } from "./audio.js";
+import { playKeyClick, playConfirm, playError, playPowerOff, playPowerOn, playZeroize, unlockAudio } from "./audio.js";
 import { buildTopbar } from "./topbar.js";
 import {
   transmitText,
@@ -18,6 +18,29 @@ import {
   BELL103_ORIGINATE,
   type ReceiverHandle,
 } from "./modem.js";
+import type { BackendId } from "../crypto/CryptoBackend.js";
+import {
+  createBackend,
+  DEFAULT_BACKEND_ID,
+} from "../crypto/backends/registry.js";
+
+const CIPHER_STORAGE = "kl43.cipher.v1";
+function loadCipherId(): BackendId {
+  const stored = localStorage.getItem(CIPHER_STORAGE);
+  if (stored === "lfsr-nlc" || stored === "aes-ctr" || stored === "des-cbc") return stored;
+  return DEFAULT_BACKEND_ID;
+}
+
+const VIEW_ANGLE_STORAGE = "kl43.viewAngle.v1";
+const SILENT_STORAGE = "kl43.silent.v1";
+function loadViewAngle(): number {
+  const raw = localStorage.getItem(VIEW_ANGLE_STORAGE);
+  const n = raw === null ? NaN : Number(raw);
+  return Number.isFinite(n) && n >= 0 && n <= 7 ? Math.floor(n) : 4;
+}
+function loadSilent(): boolean {
+  return localStorage.getItem(SILENT_STORAGE) === "1";
+}
 
 const TICK_INTERVAL_MS = 100;
 
@@ -26,7 +49,13 @@ const lcdCanvas = document.getElementById("lcd-canvas") as HTMLCanvasElement;
 const keypadEl = document.getElementById("keypad") as HTMLElement;
 
 console.log("[kl43] host booting");
-const deps = defaultDeps();
+const cipherId = loadCipherId();
+console.log("[kl43] cipher:", cipherId);
+const deps = defaultDeps({
+  backend: createBackend(cipherId),
+  viewAngle: loadViewAngle(),
+  silent: loadSilent(),
+});
 console.log("[kl43] deps ok");
 const machine = new Machine(deps);
 console.log("[kl43] machine ok");
@@ -101,7 +130,12 @@ function render(): void {
     deps.buffers,
     deps.clock,
   );
-  paintLcd(lcdCanvas, screen);
+  // While the operator is live-adjusting the view angle, preview the chosen
+  // level; otherwise use the committed value from deps.
+  const angle = machine.state.kind === "V_ADJUST"
+    ? machine.state.level
+    : deps.viewAngle;
+  paintLcd(lcdCanvas, screen, angle);
   device.classList.toggle("off", machine.state.kind === "OFF");
 
   const nowKind = machine.state.kind;
@@ -111,6 +145,10 @@ function render(): void {
   } else if (prevStateKind === "C_RX_WAIT" && nowKind !== "C_RX_WAIT") {
     stopReceiver();
   }
+  // Power-on chirp: fires when the user confirms boot (BOOT_CONFIRM → BANNER).
+  if (nowKind === "BANNER" && prevStateKind === "BOOT_CONFIRM") {
+    playPowerOn();
+  }
   prevStateKind = nowKind;
 }
 
@@ -119,10 +157,13 @@ function handleEffects(effects: readonly Effect[]): void {
     switch (e.kind) {
       case "keyLoaded":
       case "keyUpdated":
+        persistKeys();
+        playConfirm(deps.silent);
+        break;
       case "zeroizedAll":
       case "zeroizedSlot":
         persistKeys();
-        playConfirm(deps.silent);
+        playZeroize();
         break;
       case "encrypted":
       case "decrypted":
@@ -135,6 +176,14 @@ function handleEffects(effects: readonly Effect[]): void {
         break;
       case "powerOff":
         playPowerOff();
+        break;
+      case "viewAngleChanged":
+        try { localStorage.setItem(VIEW_ANGLE_STORAGE, String(e.level)); }
+        catch (err) { console.warn("[kl43] persist viewAngle failed:", err); }
+        break;
+      case "silentModeChanged":
+        try { localStorage.setItem(SILENT_STORAGE, e.silent ? "1" : "0"); }
+        catch (err) { console.warn("[kl43] persist silent failed:", err); }
         break;
       case "txTransmitted":
         if (e.mode === "AUDIO") {
@@ -156,7 +205,7 @@ function dispatch(ev: KeyEvent): void {
 
 const { flashKey } = buildKeypad(keypadEl, dispatch);
 enableCalibration(device, keypadEl);
-buildTopbar(dispatch, flashKey);
+buildTopbar(dispatch, flashKey, cipherId);
 
 // Resume AudioContext on the first user gesture (browser autoplay policy).
 window.addEventListener("pointerdown", unlockAudio, { once: true });
@@ -223,6 +272,25 @@ document.addEventListener("keydown", (e) => {
   e.preventDefault();
   if (flashId) flashKey(flashId);
   dispatch(ev);
+});
+
+// Clipboard paste: fan out the pasted text as individual char events so it
+// flows through the same input path as typing. Uppercase for messages;
+// cipher-key state machine will filter invalid chars itself.
+document.addEventListener("paste", (e) => {
+  const text = e.clipboardData?.getData("text/plain") ?? "";
+  if (!text) return;
+  e.preventDefault();
+  for (const raw of text) {
+    const ch = raw.toUpperCase();
+    if (ch === "\n" || ch === "\r") {
+      dispatch({ kind: "key", key: "ENTER" });
+    } else if (ch === " ") {
+      dispatch({ kind: "char", ch: " " });
+    } else if (ch.length === 1 && ch >= " " && ch <= "~") {
+      dispatch({ kind: "char", ch });
+    }
+  }
 });
 
 // Tick pump. Using setInterval (not rAF) so ticks keep firing when the tab is

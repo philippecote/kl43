@@ -13,7 +13,7 @@ import { makeMi, miChecksum } from "../crypto/Mi.js";
 import { base32Decode } from "./Base32.js";
 import { KeyCompartmentStore } from "../state/KeyCompartment.js";
 import { appendChecksum, decodeKey } from "../crypto/KeyCodec.js";
-import { DesBackend } from "../crypto/DesBackend.js";
+import { LfsrNlcBackend } from "../crypto/backends/LfsrNlcBackend.js";
 import { decryptMessage, encryptMessage } from "./EncryptedMessage.js";
 
 const fixedRandom = (seed: number) => (n: number): Uint8Array => {
@@ -179,7 +179,7 @@ describe("integration: encrypt → frame → (wire) → unframe → decrypt", ()
   it("station A encrypts + frames; station B unframes + decrypts", () => {
     const store = new KeyCompartmentStore();
     const comp = store.load(1, "INTEG", keyLetters(777));
-    const backend = new DesBackend();
+    const backend = new LfsrNlcBackend();
 
     const plaintext = "THE EAGLE HAS LANDED AT 0100Z. POSITION UNCHANGED. OVER.";
     const msg = encryptMessage(comp, backend, plaintext, fixedRandom(321));
@@ -206,7 +206,7 @@ describe("integration: encrypt → frame → (wire) → unframe → decrypt", ()
   it("recovers plaintext after a single-byte burst corrupts the wire", () => {
     const store = new KeyCompartmentStore();
     const comp = store.load(1, "BURST", keyLetters(42));
-    const backend = new DesBackend();
+    const backend = new LfsrNlcBackend();
 
     const plaintext = "SPARE PARTS REQ: BATT X12, RADIO ACK.";
     const msg = encryptMessage(comp, backend, plaintext, fixedRandom(11));
