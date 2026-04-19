@@ -183,7 +183,49 @@ export class KeyCompartmentStore {
     }
     this.selectedId = null;
   }
+
+  /**
+   * Serialize the compartment into a plain-JSON form. Excludes the cached
+   * `currentKey` since it's derivable from `kRaw` + `updateLevel`. This is a
+   * dev-mode persistence hook for localStorage; the spec §9.4 "encrypted at
+   * rest" guarantee is out of scope here.
+   */
+  snapshot(): SlotSnapshot[] {
+    return this.slots.map((s) => {
+      const c = s.compartment;
+      if (!c) return null;
+      return {
+        id: c.id,
+        name: c.name,
+        kRaw: Array.from(c.kRaw),
+        checksum: c.checksum,
+        updateLevel: c.updateLevel,
+      };
+    });
+  }
+
+  /** Restore from a `snapshot()` result. Existing contents are zeroized first. */
+  loadSnapshot(snap: SlotSnapshot[]): void {
+    this.clearAll();
+    for (const entry of snap) {
+      if (!entry) continue;
+      const slot = this.slots[entry.id - 1]!;
+      const kRaw = new Uint8Array(entry.kRaw);
+      slot.compartment = Object.freeze({
+        id: entry.id,
+        name: entry.name,
+        kRaw,
+        checksum: entry.checksum,
+        updateLevel: entry.updateLevel,
+        currentKey: updateKey(kRaw, entry.updateLevel),
+      });
+    }
+  }
 }
+
+export type SlotSnapshot =
+  | { id: number; name: string; kRaw: number[]; checksum: number; updateLevel: number }
+  | null;
 
 export function formatSlotLine(id: number, c: Compartment | null): string {
   const idStr = id.toString().padStart(2, "0");

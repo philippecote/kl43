@@ -12,6 +12,12 @@ import { paintLcd } from "./lcd.js";
 import { buildKeypad, enableCalibration, keyEventFor } from "./keypad.js";
 import { playKeyClick, playConfirm, playError, playPowerOff, unlockAudio } from "./audio.js";
 import { buildTopbar } from "./topbar.js";
+import {
+  transmitText,
+  startReceiver,
+  BELL103_ORIGINATE,
+  type ReceiverHandle,
+} from "./modem.js";
 
 const TICK_INTERVAL_MS = 100;
 
@@ -25,6 +31,68 @@ console.log("[kl43] deps ok");
 const machine = new Machine(deps);
 console.log("[kl43] machine ok");
 
+// Key persistence (dev-mode — plain JSON in localStorage, not spec §9.4
+// encrypted-at-rest). Rehydrate on boot, rewrite after any effect that
+// mutates the keystore.
+const KEY_STORAGE = "kl43.keyStore.v1";
+try {
+  const raw = localStorage.getItem(KEY_STORAGE);
+  if (raw) deps.keyStore.loadSnapshot(JSON.parse(raw));
+} catch (err) {
+  console.warn("[kl43] rehydrate keyStore failed:", err);
+}
+function persistKeys(): void {
+  try {
+    localStorage.setItem(KEY_STORAGE, JSON.stringify(deps.keyStore.snapshot()));
+  } catch (err) {
+    console.warn("[kl43] persist keyStore failed:", err);
+  }
+}
+
+// Modem receiver — live only while the device is in C_RX_WAIT (AUDIO). We
+// accumulate demodulated bytes, then close the message on ~1.5s of silence
+// (carrier loss) by calling machine.feedReceived().
+let receiver: ReceiverHandle | null = null;
+let rxBuffer = "";
+let rxSilenceTimer: ReturnType<typeof setTimeout> | null = null;
+const RX_SILENCE_MS = 1500;
+let prevStateKind: string = "OFF";
+
+function stopReceiver(): void {
+  if (receiver) { receiver.stop(); receiver = null; }
+  if (rxSilenceTimer) { clearTimeout(rxSilenceTimer); rxSilenceTimer = null; }
+  rxBuffer = "";
+}
+
+async function startListeningForRx(): Promise<void> {
+  if (receiver) return;
+  console.log("[kl43] RX: requesting mic…");
+  try {
+    receiver = await startReceiver(BELL103_ORIGINATE);
+    console.log("[kl43] RX: listening on originate pair (1270/1070 Hz)");
+    receiver.onByte((b) => {
+      const ch = b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : `\\x${b.toString(16)}`;
+      console.log(`[kl43] RX byte: 0x${b.toString(16).padStart(2, "0")} (${ch})`);
+      if (b >= 0x20 && b < 0x7f) rxBuffer += String.fromCharCode(b);
+      else if (b === 0x0a || b === 0x0d) rxBuffer += "\n";
+      if (rxSilenceTimer) clearTimeout(rxSilenceTimer);
+      rxSilenceTimer = setTimeout(() => {
+        if (machine.state.kind === "C_RX_WAIT" && rxBuffer.length > 0) {
+          const text = rxBuffer;
+          console.log(`[kl43] RX: carrier lost, feeding ${text.length} chars: ${JSON.stringify(text)}`);
+          stopReceiver();
+          machine.feedReceived(text);
+          render();
+        } else {
+          stopReceiver();
+        }
+      }, RX_SILENCE_MS);
+    });
+  } catch (err) {
+    console.error("[kl43] mic start failed:", err);
+  }
+}
+
 function render(): void {
   const screen = renderScreen(
     machine.state,
@@ -35,19 +103,31 @@ function render(): void {
   );
   paintLcd(lcdCanvas, screen);
   device.classList.toggle("off", machine.state.kind === "OFF");
+
+  const nowKind = machine.state.kind;
+  const mode = "mode" in machine.state ? (machine.state as { mode?: string }).mode : undefined;
+  if (nowKind === "C_RX_WAIT" && mode === "AUDIO" && prevStateKind !== "C_RX_WAIT") {
+    void startListeningForRx();
+  } else if (prevStateKind === "C_RX_WAIT" && nowKind !== "C_RX_WAIT") {
+    stopReceiver();
+  }
+  prevStateKind = nowKind;
 }
 
 function handleEffects(effects: readonly Effect[]): void {
   for (const e of effects) {
     switch (e.kind) {
-      case "encrypted":
-      case "decrypted":
       case "keyLoaded":
       case "keyUpdated":
-      case "authChallengeSent":
-      case "authReplyComputed":
       case "zeroizedAll":
       case "zeroizedSlot":
+        persistKeys();
+        playConfirm(deps.silent);
+        break;
+      case "encrypted":
+      case "decrypted":
+      case "authChallengeSent":
+      case "authReplyComputed":
         playConfirm(deps.silent);
         break;
       case "decryptFailed":
@@ -55,6 +135,13 @@ function handleEffects(effects: readonly Effect[]): void {
         break;
       case "powerOff":
         playPowerOff();
+        break;
+      case "txTransmitted":
+        if (e.mode === "AUDIO") {
+          transmitText(e.wire, BELL103_ORIGINATE).catch((err) => {
+            console.error("[kl43] modem TX failed:", err);
+          });
+        }
         break;
     }
   }

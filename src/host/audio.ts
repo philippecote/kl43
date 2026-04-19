@@ -11,6 +11,12 @@
 
 let ctx: AudioContext | null = null;
 
+/** Lazily-created shared AudioContext. Exposed so other host modules (modem)
+ *  can plug into the same context as the key-click sounds. */
+export function getAudioContext(): AudioContext | null {
+  return getCtx();
+}
+
 function getCtx(): AudioContext | null {
   if (typeof window === "undefined") return null;
   if (!ctx) {

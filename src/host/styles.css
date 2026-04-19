@@ -178,6 +178,11 @@ body {
   background: rgba(255, 255, 255, 0.12);
 }
 
+.keygen-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .device {
   position: relative;
   width: min(1100px, 100%);
