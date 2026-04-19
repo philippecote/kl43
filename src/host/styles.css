@@ -66,6 +66,8 @@ body {
   padding: 6px 12px;
   border-radius: 6px;
   text-decoration: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
   cursor: pointer;
 }
 
@@ -287,6 +289,10 @@ body {
   padding: 0;
   cursor: pointer;
   user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
   border-radius: 4px;
   transition: background 60ms ease, box-shadow 60ms ease;
 }

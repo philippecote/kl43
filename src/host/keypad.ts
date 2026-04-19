@@ -222,8 +222,12 @@ export function buildKeypad(
     btn.dataset.calId = k.id;
     btn.setAttribute("aria-label", k.legend || k.id);
     applyRect(btn, rectForKey(k, local));
-    btn.addEventListener("click", (e) => {
-      if (document.body.classList.contains("calibrate")) { e.preventDefault(); return; }
+    // Use pointerdown (not click) so iOS Safari doesn't impose the ~300ms
+    // synthesized-click delay on touch input.
+    btn.addEventListener("pointerdown", (e) => {
+      if (document.body.classList.contains("calibrate")) return;
+      if (e.button !== undefined && e.button !== 0) return;
+      e.preventDefault();
       const ev = keyEventFor(k.id, k.legend);
       if (ev) onEvent(ev);
     });
@@ -244,8 +248,10 @@ export function buildKeypad(
     btn.dataset.calId = calId;
     btn.setAttribute("aria-label", parent.legend || parent.id);
     applyRect(btn, local[calId] ?? extra.rect);
-    btn.addEventListener("click", (e) => {
-      if (document.body.classList.contains("calibrate")) { e.preventDefault(); return; }
+    btn.addEventListener("pointerdown", (e) => {
+      if (document.body.classList.contains("calibrate")) return;
+      if (e.button !== undefined && e.button !== 0) return;
+      e.preventDefault();
       const ev = keyEventFor(parent.id, parent.legend);
       if (ev) onEvent(ev);
     });
