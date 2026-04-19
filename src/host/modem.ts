@@ -225,11 +225,13 @@ export async function startReceiver(
 
   let onByteCb: (b: number) => void = () => {};
 
-  // Debug-print throttle: emit at most one line every ~500 ms, and only
-  // when the sample looks non-trivial (either the gate passed, or the
-  // window has audible energy). Keeps the log readable.
+  // Periodic, unconditional debug dump (~500 ms cadence) plus per-callback
+  // mic-arrival proof. Lets us tell at a glance whether we're getting any
+  // audio at all, what the peak amplitude is, and what each Goertzel sees.
   let lastDebugAt = 0;
-  const debugDump = (tag: string, centerIdx: number) => {
+  let cbCount = 0;
+  let cbPeak = 0;
+  const debugTick = (centerIdx: number) => {
     if (!DEBUG_MODEM) return;
     const now = performance.now();
     if (now - lastDebugAt < 500) return;
@@ -239,24 +241,35 @@ export async function startReceiver(
     const energy = windowEnergy(centerIdx);
     const big = Math.max(em, es);
     const small = Math.max(1e-12, Math.min(em, es));
+    const ratio = big / small;
+    const snr = energy / Math.max(1e-12, noiseFloor);
+    const wouldPass =
+      energy > ABS_ENERGY_FLOOR && energy > noiseFloor * SNR_FACTOR && ratio > BIN_RATIO;
     // eslint-disable-next-line no-console
     console.log(
-      `[kl43/modem ${tag}] em=${em.toExponential(2)} es=${es.toExponential(2)} ` +
-        `ratio=${(big / small).toFixed(1)} winE=${energy.toExponential(2)} ` +
-        `floor=${noiseFloor.toExponential(2)} ` +
-        `snr=${(energy / Math.max(1e-12, noiseFloor)).toFixed(1)}`,
+      `[kl43/modem] cb=${cbCount} peak=${cbPeak.toFixed(3)} ` +
+        `em=${em.toExponential(2)} es=${es.toExponential(2)} ratio=${ratio.toFixed(1)} ` +
+        `winE=${energy.toExponential(2)} floor=${noiseFloor.toExponential(2)} ` +
+        `snr=${snr.toFixed(1)} state=${state} pass=${wouldPass}`,
     );
+    cbCount = 0;
+    cbPeak = 0;
   };
 
   proc.onaudioprocess = (e: AudioProcessingEvent) => {
     const input = e.inputBuffer.getChannelData(0);
+    cbCount++;
     for (let i = 0; i < input.length; i++) {
-      ring[head % ringLen] = input[i]!;
+      const s = input[i]!;
+      ring[head % ringLen] = s;
       head++;
+      const a = s < 0 ? -s : s;
+      if (a > cbPeak) cbPeak = a;
 
       // We can detect centred on any idx where idx + halfWin <= head.
       const centerIdx = head - halfWin - 1;
       if (centerIdx < halfWin) continue;
+      debugTick(centerIdx);
 
       if (state === "IDLE") {
         if (head % scanStep !== 0) continue;
@@ -267,11 +280,9 @@ export async function startReceiver(
         if (!d.ok) {
           const e = windowEnergy(centerIdx);
           noiseFloor = noiseFloor === 0 ? e : noiseFloor * 0.98 + e * 0.02;
-          if (e > ABS_ENERGY_FLOOR) debugDump("idle-noise", centerIdx);
           lastIdle = 1;
           continue;
         }
-        debugDump("idle-carrier", centerIdx);
         if (d.bit === 0 && lastIdle === 1) {
           // Start-bit candidate. Walk back with a narrow window to find the
           // actual mark→space edge (within a few samples), then validate by
