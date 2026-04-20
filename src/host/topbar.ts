@@ -16,12 +16,19 @@ import { decodeKey, appendChecksum } from "../crypto/KeyCodec.js";
 import type { KeyEvent } from "../machine/Machine.js";
 import type { BackendId } from "../crypto/CryptoBackend.js";
 import { ALL_BACKENDS } from "../crypto/backends/registry.js";
+import type { KeyCompartmentStore } from "../state/KeyCompartment.js";
 import { modemConfig, MODEM_DEFAULTS, type ModemConfig } from "./modem.js";
-import { buildShareUrl } from "./shareLink.js";
+import {
+  buildShareUrl,
+  commitLoad,
+  promptForKeyLoad,
+  slotLabel,
+} from "./shareLink.js";
 import { renderQrInto } from "./qrcode.js";
 
 type Dispatcher = (ev: KeyEvent) => void;
 type FlashKey = (id: string) => void;
+type AfterLoad = () => void;
 
 const CIPHER_STORAGE = "kl43.cipher.v1";
 
@@ -45,12 +52,19 @@ async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
-function setupKeyGen(dispatch: Dispatcher, flashKey: FlashKey, currentCipher: BackendId): void {
+function setupKeyGen(
+  dispatch: Dispatcher,
+  flashKey: FlashKey,
+  currentCipher: BackendId,
+  keyStore: KeyCompartmentStore,
+  afterLoad: AfterLoad,
+): void {
   const dlg = document.getElementById("keygen-dialog");
   const keyText = document.getElementById("keygen-key");
   const statusEl = document.getElementById("keygen-status");
   const btnRegen = document.getElementById("keygen-regen") as HTMLButtonElement | null;
   const btnCopy = document.getElementById("keygen-copy") as HTMLButtonElement | null;
+  const btnLoad = document.getElementById("keygen-load") as HTMLButtonElement | null;
   const btnType = document.getElementById("keygen-type") as HTMLButtonElement | null;
   const btnShare = document.getElementById("keygen-share") as HTMLButtonElement | null;
   const btnClose = document.getElementById("keygen-close") as HTMLButtonElement | null;
@@ -58,8 +72,8 @@ function setupKeyGen(dispatch: Dispatcher, flashKey: FlashKey, currentCipher: Ba
   const shareUrlInput = document.getElementById("keygen-share-url") as HTMLInputElement | null;
   const shareQr = document.getElementById("keygen-share-qr");
   const openBtn = document.getElementById("menu-keygen");
-  if (!dlg || !keyText || !statusEl || !btnRegen || !btnCopy || !btnType || !btnShare ||
-      !btnClose || !sharePanel || !shareUrlInput || !shareQr || !openBtn) return;
+  if (!dlg || !keyText || !statusEl || !btnRegen || !btnCopy || !btnLoad || !btnType ||
+      !btnShare || !btnClose || !sharePanel || !shareUrlInput || !shareQr || !openBtn) return;
 
   let current = "";
   const setStatus = (msg: string) => { statusEl.textContent = msg; };
@@ -76,6 +90,23 @@ function setupKeyGen(dispatch: Dispatcher, flashKey: FlashKey, currentCipher: Ba
   btnCopy.addEventListener("click", async () => {
     const ok = await copyToClipboard(current);
     setStatus(ok ? "Copied to clipboard." : "Clipboard unavailable — select text above and copy manually.");
+  });
+  btnLoad.addEventListener("click", async () => {
+    // Reuse the exact same slot+name picker that shared-link intake uses —
+    // the only difference is wording (no URL-leakage warning) and that the
+    // current cipher can't mismatch, so no reload dance is needed.
+    const confirmed = await promptForKeyLoad(
+      { key: current, cipher: currentCipher, name: "LOCAL" },
+      keyStore,
+      "local-keygen",
+    );
+    if (!confirmed) {
+      setStatus("Load cancelled.");
+      return;
+    }
+    commitLoad(keyStore, confirmed);
+    afterLoad();
+    setStatus(`Loaded ${confirmed.name} into compartment ${slotLabel(confirmed.slot)}.`);
   });
   btnType.addEventListener("click", () => {
     for (const ch of current) {
@@ -317,9 +348,11 @@ export function buildTopbar(
   dispatch: Dispatcher,
   flashKey: FlashKey,
   currentCipherId: BackendId,
+  keyStore: KeyCompartmentStore,
+  afterLoad: AfterLoad,
 ): void {
   loadModemConfig();
-  setupKeyGen(dispatch, flashKey, currentCipherId);
+  setupKeyGen(dispatch, flashKey, currentCipherId, keyStore, afterLoad);
   setupCipherPicker(currentCipherId);
   setupModemPicker();
 }

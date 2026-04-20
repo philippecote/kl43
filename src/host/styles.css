@@ -311,7 +311,9 @@ body {
   align-items: center;
   justify-content: center;
   padding: 20px;
-  z-index: 1200;
+  /* Must stack above .keygen-dialog (z-index 10000) — the "Load into
+     device" button opens this overlay on top of the key generator. */
+  z-index: 10100;
 }
 
 .share-confirm {
@@ -359,6 +361,66 @@ body {
   border-left: 3px solid #ff8c3c;
   padding: 8px 10px;
   border-radius: 4px;
+}
+
+.share-confirm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 12px;
+}
+
+.share-confirm-field label {
+  font-size: 12px;
+  color: #8a8a8a;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.share-confirm-input,
+.share-confirm-select {
+  font: inherit;
+  font-size: 14px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: #0f0f0f;
+  color: #eaeaea;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.share-confirm-input {
+  font-family: ui-monospace, monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.share-confirm-input:focus,
+.share-confirm-select:focus {
+  outline: none;
+  border-color: #2a6ad0;
+}
+
+.share-confirm-hint {
+  font-size: 11px;
+  color: #8a8a8a;
+}
+
+.share-confirm-hint-warn {
+  color: #ffb37a;
+}
+
+.share-confirm-error {
+  margin: 0 0 8px !important;
+  font-size: 12px !important;
+  color: #ff7a7a !important;
+  min-height: 1em;
+}
+
+.share-confirm-error:empty {
+  margin: 0 !important;
+  min-height: 0;
 }
 
 .share-confirm-actions {

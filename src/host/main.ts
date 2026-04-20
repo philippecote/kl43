@@ -226,7 +226,20 @@ function handleEffects(effects: readonly Effect[]): void {
           currentTx = handle;
           handle.done
             .catch((err) => console.error("[kl43] modem TX failed:", err))
-            .finally(() => { if (currentTx === handle) currentTx = null; });
+            .finally(() => {
+              if (currentTx === handle) currentTx = null;
+              // Flip the LCD from "TRANSMITTING MESSAGE" to "TRANSMISSION
+              // COMPLETE" the moment the modem actually falls silent, so
+              // the two are in sync — no more phantom-complete screen
+              // painted over a still-playing carrier.
+              machine.txComplete();
+              render();
+            });
+        } else {
+          // DIGITAL (RS-232) is not simulated end-to-end; treat the send
+          // as instantaneous so the state machine still progresses to
+          // TRANSMISSION COMPLETE.
+          machine.txComplete();
         }
         break;
     }
@@ -242,7 +255,10 @@ function dispatch(ev: KeyEvent): void {
 
 const { flashKey } = buildKeypad(keypadEl, dispatch);
 enableCalibration(device, keypadEl);
-buildTopbar(dispatch, flashKey, cipherId);
+buildTopbar(dispatch, flashKey, cipherId, deps.keyStore, () => {
+  persistKeys();
+  render();
+});
 
 // Resume AudioContext on the first user gesture (browser autoplay policy).
 window.addEventListener("pointerdown", unlockAudio, { once: true });
@@ -264,6 +280,17 @@ void handleShareOnBoot(deps.keyStore, cipherId).then((toast) => {
 // keys. Unknown keys are ignored.
 document.addEventListener("keydown", (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
+  // If focus is inside an <input>, <textarea>, <select>, or contenteditable
+  // element, let the browser handle the keystroke — otherwise app-level
+  // dialogs (key-name input, share URL field, etc.) can't be typed in
+  // because the device swallows every letter.
+  const target = e.target as HTMLElement | null;
+  if (target) {
+    const tag = target.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable) {
+      return;
+    }
+  }
   const k = e.key;
   let ev: KeyEvent | null = null;
   let flashId: string | null = null;

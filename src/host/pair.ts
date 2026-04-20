@@ -227,7 +227,16 @@ function buildStation(
             s.currentTx = handle;
             handle.done
               .catch((err) => console.error(`[kl43/pair/${id}] modem TX failed:`, err))
-              .finally(() => { if (s.currentTx === handle) s.currentTx = null; });
+              .finally(() => {
+                if (s.currentTx === handle) s.currentTx = null;
+                // Keep the LCD in "TRANSMITTING MESSAGE" until the modem
+                // has actually finished playing, then flip to
+                // "TRANSMISSION COMPLETE" in the same frame.
+                machine.txComplete();
+                render();
+              });
+          } else {
+            machine.txComplete();
           }
           break;
       }
@@ -375,7 +384,7 @@ setFocusedStation("a");
 document.addEventListener("keydown", (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const target = e.target as HTMLElement | null;
-  if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+  if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
   const s = stations[focusedStation];
   const dispatch = (s as unknown as { dispatch: (ev: KeyEvent) => void }).dispatch;
   const k = e.key;

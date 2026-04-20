@@ -85,15 +85,15 @@
         <div class="keygen-actions">
           <button id="keygen-regen" type="button">Regenerate</button>
           <button id="keygen-copy" type="button">Copy</button>
-          <button id="keygen-type" type="button">Type into device</button>
+          <button id="keygen-load" type="button" title="Load this key into a local compartment">Load into device</button>
+          <button id="keygen-type" type="button" title="Type this key at the Key Change prompt">Type into device</button>
           <button id="keygen-share" type="button" title="Copy a link that loads this key on another device">Share link</button>
         </div>
         <div id="keygen-share-panel" class="keygen-share-panel" hidden>
           <p class="keygen-share-hint">
             Share this URL with the other station. Opening it asks them to
-            confirm, then loads the key into compartment 01 under the same
-            cipher. For demo use only — URLs are not a secure key-exchange
-            channel.
+            pick a compartment and confirm under the same cipher. For demo
+            use only — URLs are not a secure key-exchange channel.
           </p>
           <input id="keygen-share-url" type="text" readonly aria-label="Share URL"/>
           <div id="keygen-share-qr" class="keygen-share-qr" aria-label="QR code of share URL"></div>
