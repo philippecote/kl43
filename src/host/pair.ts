@@ -424,6 +424,31 @@ document.addEventListener("keydown", (e) => {
   dispatch(ev);
 });
 
+// Paste routing — mirrors main.ts so operators can paste long messages
+// into whichever station is focused. Fans characters out through the same
+// dispatch path as typing; normalize CRLF/CR so Windows line endings don't
+// dispatch two ENTERs per break.
+document.addEventListener("paste", (e) => {
+  const target = e.target as HTMLElement | null;
+  if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
+  const text = e.clipboardData?.getData("text/plain") ?? "";
+  if (!text) return;
+  e.preventDefault();
+  const s = stations[focusedStation];
+  const dispatch = (s as unknown as { dispatch: (ev: KeyEvent) => void }).dispatch;
+  const normalized = text.replace(/\r\n?/g, "\n");
+  for (const raw of normalized) {
+    const ch = raw.toUpperCase();
+    if (ch === "\n") {
+      dispatch({ kind: "key", key: "ENTER" });
+    } else if (ch === " ") {
+      dispatch({ kind: "char", ch: " " });
+    } else if (ch.length === 1 && ch >= " " && ch <= "~") {
+      dispatch({ kind: "char", ch });
+    }
+  }
+});
+
 // Wire the preload / reset / mute controls.
 const preloadBtn = document.getElementById("pair-preload") as HTMLButtonElement | null;
 const resetBtn = document.getElementById("pair-reset") as HTMLButtonElement | null;
