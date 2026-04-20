@@ -1,6 +1,6 @@
 /* Photo-overlay styling for the TSEC/KL-43C emulator.
  *
- * The device background is a photograph of the real unit (public/device.png,
+ * The device background is a photograph of the real unit (public/upscaled.jpg,
  * 1280×853 from the Crypto Museum). All interactive elements — the LCD
  * character cells and the 59 key hotspots — are positioned absolutely over
  * their real on-device locations using percentage coordinates so the layout
@@ -475,7 +475,7 @@ body {
   position: relative;
   width: min(1100px, 100%);
   aspect-ratio: var(--device-aspect);
-  background-image: url(/device.png);
+  background-image: url(/upscaled.jpg);
   background-size: 100% 100%;
   background-repeat: no-repeat;
   box-shadow: 0 16px 32px rgba(0, 0, 0, 0.6);

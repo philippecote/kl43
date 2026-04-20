@@ -50,7 +50,7 @@ const COL_PITCH = 6.10;
 const COL_WIDTH = 5.20;
 
 // Committed overrides — baked from a hand-calibration session against
-// public/device.png. Values are percentages of the device container.
+// public/upscaled.jpg. Values are percentages of the device container.
 const HOTSPOT_OVERRIDES: Partial<Record<string, Rect>> = {
   BOT:   { top: 44.227, left: 16.364, width: 4.745, height: 3.122 },
   EOT:   { top: 44.227, left: 22.373, width: 4.745, height: 2.986 },
