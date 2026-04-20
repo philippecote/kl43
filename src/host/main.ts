@@ -356,9 +356,12 @@ document.addEventListener("paste", (e) => {
   const text = e.clipboardData?.getData("text/plain") ?? "";
   if (!text) return;
   e.preventDefault();
-  for (const raw of text) {
+  // Normalize CRLF / CR → LF so a Windows-style line ending doesn't
+  // dispatch two ENTERs and double every line break in the editor.
+  const normalized = text.replace(/\r\n?/g, "\n");
+  for (const raw of normalized) {
     const ch = raw.toUpperCase();
-    if (ch === "\n" || ch === "\r") {
+    if (ch === "\n") {
       dispatch({ kind: "key", key: "ENTER" });
     } else if (ch === " ") {
       dispatch({ kind: "char", ch: " " });

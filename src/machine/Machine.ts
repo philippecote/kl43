@@ -1590,7 +1590,14 @@ export class Machine {
           return [];
         }
         if (event.key === "ENTER") {
-          buf.insertChar("\n");
+          // Cap-gate newline inserts the same way char events are gated.
+          // Without this, pasting past the cap would keep appending
+          // newlines (chars get filtered by the `buf.length < cap` check
+          // below, but ENTER used to slip through unchecked) until the
+          // physical buffer filled and `insertChar` threw BufferFullError
+          // mid-paste, leaving the editor in a bad state.
+          const cap = s.mode === "CIPHER" ? MAX_BUFFER_CHARS : MAX_PLAINTEXT_CHARS;
+          if (buf.length < cap) buf.insertChar("\n");
           return [];
         }
         if (event.key === "DCH") {
