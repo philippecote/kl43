@@ -441,6 +441,9 @@ export function renderScreen(
     case "C_LOCAL_CIPHER_DENIED":
       return STRINGS.warn_local_cipher.screen;
 
+    case "C_PLAIN_DENIED":
+      return STRINGS.warn_plain_tx.screen;
+
     case "C_TX_SLOT_SELECT":
       return messageSelectorScreen();
 

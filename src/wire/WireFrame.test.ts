@@ -58,22 +58,36 @@ describe("WireFrame round-trip (noise-free)", () => {
     );
   });
 
-  it("produces a single codeword for payloads that fit in k-2 bytes", () => {
+  it("produces a single full codeword when payload exactly fills k data bytes", () => {
     const rs = new ReedSolomon();
     const mi = makeMi(fixedRandom(42));
+    // prefixed = k exactly → last block has no zero pad, wire = k + parity = n.
     const payload = new Uint8Array(rs.k - 2).fill(0xaa);
     const frame = frameOutgoing(mi, payload, rs);
-    // One codeword = n base32-encoded; n=255 → ceil(255*8/5) = 408 chars
-    // rounded up to a multiple of 8 → 408.
     expect(base32Decode(frame.body).length).toBe(rs.n);
   });
 
-  it("produces two codewords when the prefixed payload spills past k", () => {
+  it("shortens the last block: short payloads skip the zero pad on the wire", () => {
+    const rs = new ReedSolomon();
+    const mi = makeMi(fixedRandom(43));
+    // prefixed = 2 + 8 = 10 real bytes; parity = 32; wire = 10 + 32 = 42
+    // bytes. The full (non-shortened) codeword would have been 255.
+    const payload = new Uint8Array(8).fill(0x5a);
+    const frame = frameOutgoing(mi, payload, rs);
+    expect(base32Decode(frame.body).length).toBe(8 + 2 + (rs.n - rs.k));
+    // Roundtrip must still recover the original payload byte-for-byte.
+    const { ciphertextBytes } = unframeIncoming(frame, rs);
+    expect(Array.from(ciphertextBytes)).toEqual(Array.from(payload));
+  });
+
+  it("multi-block frame: earlier blocks full, last block shortened", () => {
     const rs = new ReedSolomon();
     const mi = makeMi(fixedRandom(99));
-    const payload = new Uint8Array(rs.k - 1); // +2 bytes prefix = k+1 → 2 blocks
+    // prefixed = k + 1 → 2 blocks: first full (n wire bytes), last has
+    // 1 real data byte + parity wire bytes.
+    const payload = new Uint8Array(rs.k - 1);
     const frame = frameOutgoing(mi, payload, rs);
-    expect(base32Decode(frame.body).length).toBe(2 * rs.n);
+    expect(base32Decode(frame.body).length).toBe(rs.n + 1 + (rs.n - rs.k));
   });
 });
 
@@ -165,13 +179,18 @@ describe("parameter validation", () => {
     expect(() => frameOutgoing(mi, hugePayload)).toThrow(WireFrameError);
   });
 
-  it("rejects encoded body whose length isn't a multiple of n", () => {
+  it("rejects a wire body smaller than a single parity block", () => {
     const mi = makeMi(fixedRandom(66));
-    // 255-byte codeword has 408 base32 chars padded to 408; strip the last
-    // 8 chars so the decoded length is wrong.
     const frame = frameOutgoing(mi, new Uint8Array([1, 2, 3]));
-    const truncated = { mi, body: frame.body.slice(0, frame.body.length - 8) };
+    // Keep only a handful of base32 chars — decoded bytes < parityLen+1,
+    // so the last-block geometry check must fail.
+    const truncated = { mi, body: frame.body.slice(0, 8) };
     expect(() => unframeIncoming(truncated)).toThrow(WireFrameError);
+  });
+
+  it("rejects a completely empty body", () => {
+    const mi = makeMi(fixedRandom(67));
+    expect(() => unframeIncoming({ mi, body: "" })).toThrow(WireFrameError);
   });
 });
 

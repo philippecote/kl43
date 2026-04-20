@@ -21,6 +21,7 @@ import { decodeKey, appendChecksum } from "../crypto/KeyCodec.js";
 import { LfsrNlcBackend } from "../crypto/backends/LfsrNlcBackend.js";
 import { FakeClock } from "../state/Clock.js";
 import { computeReply } from "../auth/Authentication.js";
+import { base32Decode, base32Encode } from "../wire/Base32.js";
 
 function fixedRandom(seed = 1): (n: number) => Uint8Array {
   let s = seed >>> 0;
@@ -812,15 +813,30 @@ describe("Encrypt/Decrypt round trip (MANUAL pp.17-20)", () => {
     b.m.press({ kind: "tick", elapsedMs: CRYPT_BUSY_MS });
     const wire = b.buffers.get("A").buffer.toString();
 
-    // Stomp a long run of the body: corrupt >16 bytes (well past RS
-    // capacity) so the decoder gives up rather than silently mis-correcting.
-    // We spray 'A' over bytes 40..120 of the display string, skipping
-    // spaces so we stay inside the base32 body.
-    const chars = wire.split("");
-    for (let i = 40; i < 140 && i < chars.length; i++) {
-      if (/[A-Z2-7]/.test(chars[i]!)) chars[i] = chars[i] === "A" ? "B" : "A";
+    // Stomp the ciphertext at the byte level: decode the base32 body,
+    // XOR 32 contiguous bytes with 0xFF, re-encode. 32 byte errors is
+    // 2× the RS correction capacity so the decoder must give up rather
+    // than silently mis-correcting to garbage plaintext. (Per-character
+    // corruption is tricky: base32 is only 5 bits per char, so some
+    // pathological flips — e.g. "A" → "A" after filtering — can leave
+    // the wire bytes unchanged.)
+    const [miPart, ...bodyParts] = wire.split(/\s+/).reduce<string[][]>(
+      (acc, tok) => {
+        if (acc.length === 0) acc.push([]);
+        if (/^[A-Z]+$/.test(tok) && acc[0]!.join("").length < 12) acc[0]!.push(tok);
+        else (acc[1] ??= []).push(tok);
+        return acc;
+      },
+      [],
+    );
+    const mi = miPart!.join("").slice(0, 12);
+    const body = (bodyParts[0] ?? []).join("");
+    const bodyBytes = [...base32Decode(body)];
+    for (let i = 0; i < Math.min(32, bodyBytes.length); i++) {
+      bodyBytes[i] = (bodyBytes[i]! ^ 0xff) & 0xff;
     }
-    const noisy = chars.join("");
+    const noisyBody = base32Encode(Uint8Array.from(bodyBytes)).replace(/=+$/, "");
+    const noisy = mi + " " + noisyBody;
     const bufA = b.buffers.get("A").buffer;
     bufA.clear();
     bufA.insertString(noisy);
@@ -1325,6 +1341,44 @@ describe("Communications (MANUAL p.22-40)", () => {
     // Any key acknowledges the warning and returns to Main Menu.
     b.m.press({ kind: "key", key: "ENTER" });
     expect(b.m.state.kind).toBe("MAIN_MENU");
+  });
+
+  // MANUAL p.53 Appendix B — warn_plain_tx: the real device refuses to put
+  // plaintext on the wire even if the operator forgets to press E first.
+  it("TX with plaintext surfaces MESSAGE IN PLAIN TEXT FORM per MANUAL p.53", () => {
+    const b = build();
+    b.buffers.get("A").buffer.insertString("HELLO");
+    // Slot is still PLAIN/TYPED — operator never pressed E.
+    toMenu(b.m);
+    b.m.press({ kind: "char", ch: "C" });
+    b.m.press({ kind: "char", ch: "A" });
+    b.m.press({ kind: "char", ch: "T" });
+    b.m.press({ kind: "char", ch: "C" }); // Connector Audio
+    b.m.press({ kind: "char", ch: "A" });
+    expect(b.m.state).toEqual({ kind: "C_PLAIN_DENIED" });
+    const rows = renderScreen(b.m.state, b.store, false, b.buffers);
+    expect(rows[0]?.trim()).toBe("MESSAGE IN PLAIN TEXT FORM");
+    expect(rows[1]?.trim()).toBe("COMMUNICATIONS DENIED.");
+    // Any key acknowledges the warning and returns to Main Menu.
+    b.m.press({ kind: "key", key: "ENTER" });
+    expect(b.m.state.kind).toBe("MAIN_MENU");
+  });
+
+  // A decrypted message is back in plaintext form; retransmitting it would
+  // defeat the device's entire purpose. The PLAIN rule fires regardless of
+  // provenance, so DECRYPTED origin is denied the same as TYPED.
+  it("TX with decrypted plaintext is also rejected per MANUAL p.53", () => {
+    const b = build();
+    b.buffers.get("A").buffer.insertString("HELLO");
+    b.buffers.markReceived("A");
+    b.buffers.markDecrypted("A");
+    toMenu(b.m);
+    b.m.press({ kind: "char", ch: "C" });
+    b.m.press({ kind: "char", ch: "A" });
+    b.m.press({ kind: "char", ch: "T" });
+    b.m.press({ kind: "char", ch: "C" });
+    b.m.press({ kind: "char", ch: "A" });
+    expect(b.m.state).toEqual({ kind: "C_PLAIN_DENIED" });
   });
 
   it("audio submode screen shows Acoustic/Connector with Select/Function indicator, 40 chars", () => {

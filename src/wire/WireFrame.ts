@@ -6,22 +6,37 @@
 //   plaintext
 //     → [CBC-encrypt under (sessionKey, IV=derive(MI,sessionKey))]
 //     → ciphertext bytes C
-//     → payload P = [len_hi, len_lo, C...] + zero-pad to 223*N
-//     → RS-encode each 223-byte chunk → concatenate 255-byte codewords
-//     → base32-encode the whole codeword stream → body
+//     → payload P = [len_hi, len_lo, C...] + virtual zero-pad to 223*N
+//     → RS-encode each 223-byte chunk → 255-byte codeword per chunk
+//     → SHORTENED wire form: first N-1 codewords are full (255 bytes), but
+//       the last codeword drops its trailing zero-pad run from the data
+//       portion — transmit (real_data_bytes + 32 parity) instead of the
+//       full 255. Earlier versions transmitted the full 255 verbatim, which
+//       (a) tripled the audio length for short messages and (b) forced the
+//       operator to voice a long string of 'A's (base32 of 0x00) when
+//       hand-copying/reading the ciphertext over a voice channel. Padding
+//       is a known-zero sentinel value on both sides, so it's wasted
+//       airtime; this is standard "shortened RS" (well-established in
+//       CCSDS / DVB / QR-code practice).
+//     → base32-encode the whole wire byte stream → body
 //     → display: MI (12 A-Z) then group3(body), single-space separated
 //
 // The 2-byte big-endian length prefix tells the receiver how many of the
-// decoded payload bytes are real ciphertext (the rest are zero padding to
-// complete the final RS data block). This is our substitute for the real
-// KL-43C framing convention — unknown from open sources, so pick a simple
-// self-describing one. Spec §6.7 explicitly marks any terminator convention
-// as [SUBSTITUTE].
+// decoded payload bytes are real ciphertext. The wire-byte count tells the
+// receiver how many bytes of virtual zero-pad to reinsert in the last
+// codeword before decoding. Both are derived quantities — no additional
+// framing header is needed.
 //
-// Inbound is the mirror: group spaces are stripped (editor already filters
-// to A-Z + 2-7), base32-decoded, split into 255-byte codewords, each
-// RS-decoded (correcting up to 16 symbol errors per codeword), then the
-// length prefix tells us how many real ciphertext bytes to return.
+// Inbound is the mirror:
+//   - Group spaces stripped (editor already filters to A-Z + 2-7).
+//   - Base32-decoded into wire bytes W.
+//   - Block count m = ceil(|W| / 255); first m-1 blocks are full, last
+//     block is reconstructed by inserting (255 - tail_bytes) zero bytes
+//     between its data portion and its parity portion.
+//   - Each reconstructed 255-byte codeword is RS-decoded (corrects up to
+//     16 symbol errors per codeword).
+//   - The 2-byte length prefix tells us how many real ciphertext bytes to
+//     return.
 
 import { ReedSolomon, type RsParams, DEFAULT_K, DEFAULT_N } from "../fec/ReedSolomon.js";
 import { base32Decode, base32Encode, filterToBase32, groupForDisplay } from "./Base32.js";
@@ -59,6 +74,10 @@ export function defaultRs(): ReedSolomon {
  * Wrap ciphertext bytes + MI into a framed, FEC-protected wire form. The
  * caller is responsible for having already derived the ciphertext via
  * CryptoBackend; this function only handles framing.
+ *
+ * Applies "shortened RS" to the final block: computes the full RS codeword
+ * against a zero-padded k-byte data block, but transmits only the real
+ * data bytes followed by the 32 parity bytes, omitting the zero tail.
  */
 export function frameOutgoing(mi: string, ciphertextBytes: Uint8Array, rs?: ReedSolomon): WireFrame {
   parseMi(mi); // rejects any non-A-Z or wrong length up front
@@ -69,8 +88,9 @@ export function frameOutgoing(mi: string, ciphertextBytes: Uint8Array, rs?: Reed
   }
   const codec = rs ?? defaultRs();
   const { k, n } = codec;
+  const parityLen = n - k;
 
-  // Build payload: [len_hi, len_lo, ciphertext, pad-to-multiple-of-k].
+  // Build payload: [len_hi, len_lo, ciphertext, virtual-zero-pad-to-k*N].
   const trueLen = ciphertextBytes.length;
   const prefixed = trueLen + LENGTH_PREFIX_BYTES;
   const blocks = Math.max(1, Math.ceil(prefixed / k));
@@ -80,39 +100,74 @@ export function frameOutgoing(mi: string, ciphertextBytes: Uint8Array, rs?: Reed
   payload[1] = trueLen & 0xff;
   payload.set(ciphertextBytes, LENGTH_PREFIX_BYTES);
 
-  // RS-encode each k-byte block to n bytes; concatenate.
-  const encoded = new Uint8Array(blocks * n);
+  // Real data bytes in the last block — everything after this is zero pad
+  // that we can safely skip on the wire. The RS codec lays the codeword
+  // out parity-first: codeword = [parity(parityLen), data(k)]. Shortening
+  // simply truncates the codeword at (parityLen + lastBlockDataLen) bytes,
+  // dropping the zero tail of the data portion.
+  const lastBlockDataLen = prefixed - (blocks - 1) * k; // 1..k
+  const wireSize = (blocks - 1) * n + parityLen + lastBlockDataLen;
+  const wire = new Uint8Array(wireSize);
+  let out = 0;
   for (let b = 0; b < blocks; b++) {
     const dataBlock = payload.subarray(b * k, (b + 1) * k);
-    const codeword = codec.encode(dataBlock);
-    encoded.set(codeword, b * n);
+    const codeword = codec.encode(dataBlock); // [parity(parityLen), data(k)]
+    const isLast = b === blocks - 1;
+    const dataToSend = isLast ? lastBlockDataLen : k;
+    wire.set(codeword.subarray(0, parityLen + dataToSend), out);
+    out += parityLen + dataToSend;
   }
 
-  return { mi, body: base32Encode(encoded) };
+  // Strip RFC 4648 `=` padding from the wire body. The KL-43 alphabet is
+  // A-Z + 2-7; `=` is not in that set and would force operators to type
+  // (or voice) a character that doesn't exist on the device. Base32Decode
+  // tolerates missing padding so this is lossless.
+  return { mi, body: base32Encode(wire).replace(/=+$/, "") };
 }
 
 /**
  * Inverse of `frameOutgoing`. Returns the recovered ciphertext bytes (ready
  * to feed into `backend.decrypt`) plus the count of corrected symbol errors
  * for telemetry / the `UNCORRECTABLE ERRORS` display path.
+ *
+ * Reconstructs the full n-byte codeword for the shortened last block by
+ * re-inserting the virtual zero pad between the received data bytes and
+ * the received parity bytes, so the RS decoder sees a standard codeword.
  */
 export function unframeIncoming(frame: WireFrame, rs?: ReedSolomon): UnframeResult {
   parseMi(frame.mi);
   const codec = rs ?? defaultRs();
   const { k, n } = codec;
+  const parityLen = n - k;
 
-  const encoded = base32Decode(frame.body);
-  if (encoded.length === 0 || encoded.length % n !== 0) {
+  const wire = base32Decode(frame.body);
+  if (wire.length === 0) {
+    throw new WireFrameError("encoded body is empty");
+  }
+  // Block layout: first m-1 blocks are full (n wire bytes), last block is
+  // (data + parity) wire bytes where data ≤ k. m = ceil(|wire| / n).
+  // The last block must carry at least one data byte plus the full parity
+  // block, otherwise we can't decode it.
+  const blocks = Math.ceil(wire.length / n);
+  const lastBlockWire = wire.length - (blocks - 1) * n;
+  if (lastBlockWire < parityLen + 1 || lastBlockWire > n) {
     throw new WireFrameError(
-      `encoded length ${encoded.length} is not a positive multiple of n=${n}`,
+      `last block wire size ${lastBlockWire} out of range [${parityLen + 1}, ${n}]`,
     );
   }
-  const blocks = encoded.length / n;
+  const lastBlockData = lastBlockWire - parityLen; // 1..k
 
   const payload = new Uint8Array(blocks * k);
   let errorsCorrected = 0;
+  let inp = 0;
   for (let b = 0; b < blocks; b++) {
-    const codeword = encoded.subarray(b * n, (b + 1) * n);
+    const isLast = b === blocks - 1;
+    const dataLen = isLast ? lastBlockData : k;
+    // Rebuild the full n-byte codeword: codeword = [parity(parityLen),
+    // received_data(dataLen), implicit_zero_pad(k - dataLen)].
+    const codeword = new Uint8Array(n);
+    codeword.set(wire.subarray(inp, inp + parityLen + dataLen), 0);
+    inp += parityLen + dataLen;
     const { data, corrected } = codec.decode(codeword);
     payload.set(data, b * k);
     errorsCorrected += corrected;

@@ -20,6 +20,7 @@ import {
   startReceiver,
   BELL103_ORIGINATE,
   type ReceiverHandle,
+  type TransmitHandle,
 } from "./modem.js";
 import type { BackendId } from "../crypto/CryptoBackend.js";
 import {
@@ -90,6 +91,21 @@ let rxSilenceTimer: ReturnType<typeof setTimeout> | null = null;
 const RX_SILENCE_MS = 1500;
 let prevStateKind: string = "OFF";
 
+// The live modem transmission, if any. We hold a handle so pressing XIT (or
+// any transition out of a TX-playing state) can abort the tone mid-stream
+// — without this, the AudioBufferSourceNode plays to completion regardless.
+let currentTx: TransmitHandle | null = null;
+function stopCurrentTx(): void {
+  if (currentTx) { currentTx.stop(); currentTx = null; }
+}
+// States where the operator still wants to hear the modem finish. Leaving
+// any of these kills the audio — matches the physical device, where
+// pressing XIT during TX drops the acoustic coupler.
+const TX_AUDIBLE_STATES: ReadonlySet<string> = new Set([
+  "C_TX_BUSY",
+  "C_TX_COMPLETE",
+]);
+
 function stopReceiver(): void {
   if (receiver) { receiver.stop(); receiver = null; }
   if (rxSilenceTimer) { clearTimeout(rxSilenceTimer); rxSilenceTimer = null; }
@@ -153,6 +169,11 @@ function render(): void {
   } else if (prevStateKind === "C_RX_WAIT" && nowKind !== "C_RX_WAIT") {
     stopReceiver();
   }
+  // Pressing XIT during TX drops us back to the main menu (or the dir
+  // selector) — silence the modem the moment we leave any audible-TX state.
+  if (TX_AUDIBLE_STATES.has(prevStateKind) && !TX_AUDIBLE_STATES.has(nowKind)) {
+    stopCurrentTx();
+  }
   // Power-on chirp: fires when the user confirms boot (BOOT_CONFIRM → BANNER).
   if (nowKind === "BANNER" && prevStateKind === "BOOT_CONFIRM") {
     playPowerOn();
@@ -200,9 +221,12 @@ function handleEffects(effects: readonly Effect[]): void {
       }
       case "txTransmitted":
         if (e.mode === "AUDIO") {
-          transmitText(e.wire, BELL103_ORIGINATE).catch((err) => {
-            console.error("[kl43] modem TX failed:", err);
-          });
+          stopCurrentTx(); // any previous TX is already done; just be safe.
+          const handle = transmitText(e.wire, BELL103_ORIGINATE);
+          currentTx = handle;
+          handle.done
+            .catch((err) => console.error("[kl43] modem TX failed:", err))
+            .finally(() => { if (currentTx === handle) currentTx = null; });
         }
         break;
     }

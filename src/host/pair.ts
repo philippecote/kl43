@@ -38,6 +38,7 @@ import {
   BELL103_ANSWER,
   type FreqPair,
   type ReceiverHandle,
+  type TransmitHandle,
 } from "./modem.js";
 import type { BackendId } from "../crypto/CryptoBackend.js";
 import { createBackend, DEFAULT_BACKEND_ID } from "../crypto/backends/registry.js";
@@ -74,7 +75,19 @@ type Station = {
   rxBuffer: string;
   rxSilenceTimer: ReturnType<typeof setTimeout> | null;
   prevStateKind: string;
+  // In-flight modem transmission from THIS station. Pressing XIT (or any
+  // transition out of an audible-TX state) aborts the tone mid-stream.
+  currentTx: TransmitHandle | null;
 };
+
+const TX_AUDIBLE_STATES: ReadonlySet<string> = new Set([
+  "C_TX_BUSY",
+  "C_TX_COMPLETE",
+]);
+
+function stopCurrentTx(s: Station): void {
+  if (s.currentTx) { s.currentTx.stop(); s.currentTx = null; }
+}
 
 let focusedStation: StationId = "a";
 const stations: Record<StationId, Station> = {} as Record<StationId, Station>;
@@ -149,6 +162,7 @@ function buildStation(
     rxBuffer: "",
     rxSilenceTimer: null,
     prevStateKind: "OFF",
+    currentTx: null,
   };
 
   const render = () => {
@@ -163,6 +177,11 @@ function buildStation(
       startListening(s);
     } else if (s.prevStateKind === "C_RX_WAIT" && nowKind !== "C_RX_WAIT") {
       stopListening(s);
+    }
+    // Leaving an audible-TX state (XIT on C_TX_COMPLETE, for example)
+    // silences this station's modem immediately.
+    if (TX_AUDIBLE_STATES.has(s.prevStateKind) && !TX_AUDIBLE_STATES.has(nowKind)) {
+      stopCurrentTx(s);
     }
     if (nowKind === "BANNER" && s.prevStateKind === "BOOT_CONFIRM") {
       playPowerOn();
@@ -203,9 +222,12 @@ function buildStation(
         }
         case "txTransmitted":
           if (e.mode === "AUDIO") {
-            transmitTextTo(e.wire, s.txPair, s.txBus).catch((err) => {
-              console.error(`[kl43/pair/${id}] modem TX failed:`, err);
-            });
+            stopCurrentTx(s);
+            const handle = transmitTextTo(e.wire, s.txPair, s.txBus);
+            s.currentTx = handle;
+            handle.done
+              .catch((err) => console.error(`[kl43/pair/${id}] modem TX failed:`, err))
+              .finally(() => { if (s.currentTx === handle) s.currentTx = null; });
           }
           break;
       }

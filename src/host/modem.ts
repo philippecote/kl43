@@ -95,10 +95,20 @@ function synthesizeFSK(bytes: Uint8Array, pair: FreqPair, ctx: AudioContext): Au
   return buf;
 }
 
-export async function transmitText(
+/**
+ * Handle for an in-flight transmission. `done` resolves when the underlying
+ * BufferSource naturally ends OR when `stop()` aborts it. `stop()` is
+ * idempotent and safe to call after natural completion.
+ */
+export type TransmitHandle = {
+  stop(): void;
+  readonly done: Promise<void>;
+};
+
+export function transmitText(
   text: string,
   pair: FreqPair = BELL103_ORIGINATE,
-): Promise<void> {
+): TransmitHandle {
   return transmitTextTo(text, pair, null);
 }
 
@@ -107,25 +117,53 @@ export async function transmitText(
  * (plus the main output) instead of just the speakers. Used by the pair
  * demo so station-A's transmit feeds station-B's receiver directly via a
  * shared AudioContext node.
+ *
+ * Returns a TransmitHandle synchronously: the caller can await `handle.done`
+ * for completion, but can also call `handle.stop()` to abort the tone
+ * mid-stream. This is how pressing XIT during a long FEC-protected TX
+ * actually silences the modem — without it, the `AudioBufferSourceNode`
+ * would play to completion regardless of what the state machine did.
  */
-export async function transmitTextTo(
+export function transmitTextTo(
   text: string,
   pair: FreqPair,
   extraDestination: AudioNode | null,
-): Promise<void> {
+): TransmitHandle {
   const ctx = getAudioContext();
   if (!ctx) throw new Error("No AudioContext");
-  if (ctx.state === "suspended") await ctx.resume();
-  const bytes = new TextEncoder().encode(text);
-  const buf = synthesizeFSK(bytes, pair, ctx);
-  const src = ctx.createBufferSource();
-  src.buffer = buf;
-  src.connect(ctx.destination);
-  if (extraDestination) src.connect(extraDestination);
-  await new Promise<void>((resolve) => {
-    src.onended = () => resolve();
-    src.start();
-  });
+  // The AudioContext may be suspended (autoplay policy) — resume is async
+  // but we still want to return the handle synchronously, so we kick off
+  // the chain and let the caller await `done` if they need completion.
+  let stopped = false;
+  let src: AudioBufferSourceNode | null = null;
+  const done: Promise<void> = (async () => {
+    if (ctx.state === "suspended") await ctx.resume();
+    if (stopped) return;
+    const bytes = new TextEncoder().encode(text);
+    const buf = synthesizeFSK(bytes, pair, ctx);
+    src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    if (extraDestination) src.connect(extraDestination);
+    await new Promise<void>((resolve) => {
+      src!.onended = () => resolve();
+      src!.start();
+    });
+  })();
+  return {
+    stop: () => {
+      if (stopped) return;
+      stopped = true;
+      // src may be null if stop() is called before the async init finished;
+      // the `stopped` flag ensures the init path returns before creating
+      // the BufferSource.
+      if (src) {
+        try { src.onended = null; src.stop(); src.disconnect(); }
+        catch { /* already stopped or disconnected */ }
+      }
+    },
+    done,
+  };
 }
 
 // ---------------------------------------------------------------------------

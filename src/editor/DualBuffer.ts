@@ -31,10 +31,22 @@ export class InvalidClassificationError extends Error {
   }
 }
 
+// Transmit denials have two distinct flavors (both from MANUAL p.52 / Appendix
+// B p.53):
+//   LOCAL_CIPHER — the slot holds operator-typed ciphertext (form=CIPHER,
+//                  origin=TYPED). Encrypt-generated and received ciphertext
+//                  are still transmittable.
+//   PLAIN        — the slot holds any plaintext. The real device refuses to
+//                  send plaintext over the radio so an operator who forgets
+//                  to press E cannot leak the message in the clear.
+export type TransmitDeniedReason = "LOCAL_CIPHER" | "PLAIN";
+
 export class TransmitDeniedError extends Error {
-  constructor(message: string) {
+  readonly reason: TransmitDeniedReason;
+  constructor(reason: TransmitDeniedReason, message: string) {
     super(message);
     this.name = "TransmitDeniedError";
+    this.reason = reason;
   }
 }
 
@@ -128,14 +140,26 @@ export class DualBuffer {
   }
 
   /**
-   * Enforce MANUAL p.52: locally-entered (typed) ciphertext cannot be
-   * transmitted. Encrypt-generated and received ciphertext are fine.
+   * Enforce two MANUAL p.52–53 transmit rules:
+   *   1. Locally-entered ciphertext (form=CIPHER, origin=TYPED) is denied
+   *      with the "CIPHER TEXT HAS BEEN LOCALLY ENTERED" warning.
+   *   2. Plaintext of any provenance is denied with the "MESSAGE IN PLAIN
+   *      TEXT FORM" warning — the real device will not put clear traffic on
+   *      the wire even if the operator forgets to press E.
+   * Encrypt-generated and received ciphertext remain transmittable.
    */
   assertTransmittable(id: SlotId): void {
     const s = this.slots[id];
     if (s.form === "CIPHER" && s.origin === "TYPED") {
       throw new TransmitDeniedError(
+        "LOCAL_CIPHER",
         "CIPHER TEXT HAS BEEN LOCALLY ENTERED. COMMUNICATIONS DENIED.",
+      );
+    }
+    if (s.form === "PLAIN") {
+      throw new TransmitDeniedError(
+        "PLAIN",
+        "MESSAGE IN PLAIN TEXT FORM. COMMUNICATIONS DENIED.",
       );
     }
   }

@@ -25,6 +25,7 @@ import {
   DualBuffer,
   InvalidClassificationError,
   MAX_CLASSIFICATION_LENGTH,
+  TransmitDeniedError,
   type SlotId,
 } from "../editor/DualBuffer.js";
 import { Clock, SystemClock } from "../state/Clock.js";
@@ -241,6 +242,10 @@ export type State =
   // MANUAL p.52: locally-entered ciphertext cannot be transmitted; display
   // the Appendix B warning until the operator acknowledges with any key.
   | { kind: "C_LOCAL_CIPHER_DENIED" }
+  // MANUAL p.53 Appendix B: the device refuses to transmit plaintext so an
+  // operator who forgot to press E cannot put the message on the wire in
+  // the clear. Any key acknowledges and returns to Main Menu.
+  | { kind: "C_PLAIN_DENIED" }
   | { kind: "C_TX_SLOT_SELECT"; mode: "AUDIO" | "DIGITAL" }
   | { kind: "C_TX_BAUD_SELECT"; slot: SlotId; baudIndex: number }  // DIGITAL TX, MANUAL p.29
   | { kind: "C_TX_PLEASE_WAIT"; slot: SlotId; baudIndex: number; remainingMs: number }
@@ -1270,6 +1275,12 @@ export class Machine {
       }
       return [];
     }
+    if (s.kind === "C_PLAIN_DENIED") {
+      if (event.kind === "key" || event.kind === "char") {
+        this._state = { kind: "MAIN_MENU", topIndex: 0 };
+      }
+      return [];
+    }
     if (s.kind === "C_ACOUSTIC_LINES") {
       if (event.kind === "key" && event.key === "XIT") {
         this._state = { kind: "C_AUDIO_SUBMODE", dir: s.dir };
@@ -1296,13 +1307,18 @@ export class Machine {
         const ch = event.ch.toUpperCase();
         if (ch === "A" || ch === "B") {
           const slot: SlotId = ch;
-          // Enforce MANUAL p.52: locally-entered ciphertext can't TX.
+          // Enforce MANUAL p.52–53: locally-entered ciphertext and raw
+          // plaintext are both refused. Dispatch on the error reason so the
+          // operator sees the correct Appendix B warning.
           try {
             this.deps.buffers.assertTransmittable(slot);
-          } catch {
-            // MANUAL p.52 / Appendix B p.53: surface warn_local_cipher so the
-            // operator knows the slot holds locally-entered ciphertext and
-            // cannot be transmitted. Any key returns to the main menu.
+          } catch (err) {
+            if (err instanceof TransmitDeniedError && err.reason === "PLAIN") {
+              // warn_plain_tx: MESSAGE IN PLAIN TEXT FORM / COMMUNICATIONS DENIED.
+              this._state = { kind: "C_PLAIN_DENIED" };
+              return [];
+            }
+            // warn_local_cipher: CIPHER TEXT HAS BEEN LOCALLY ENTERED / …DENIED.
             this._state = { kind: "C_LOCAL_CIPHER_DENIED" };
             return [];
           }

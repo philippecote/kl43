@@ -102,7 +102,7 @@ describe("form transitions", () => {
   });
 });
 
-describe("assertTransmittable (MANUAL p.52 rule)", () => {
+describe("assertTransmittable (MANUAL p.52–53 rules)", () => {
   it("allows transmission of RECEIVED ciphertext", () => {
     const d = new DualBuffer();
     d.markReceived("A");
@@ -115,7 +115,7 @@ describe("assertTransmittable (MANUAL p.52 rule)", () => {
     expect(() => d.assertTransmittable("A")).not.toThrow();
   });
 
-  it("denies transmission of TYPED + CIPHER with exact device message", () => {
+  it("denies transmission of TYPED + CIPHER with reason=LOCAL_CIPHER", () => {
     const d = new DualBuffer();
     d.markTyped("A", "CIPHER");
     try {
@@ -123,16 +123,55 @@ describe("assertTransmittable (MANUAL p.52 rule)", () => {
       throw new Error("should have thrown");
     } catch (err) {
       expect(err).toBeInstanceOf(TransmitDeniedError);
+      expect((err as TransmitDeniedError).reason).toBe("LOCAL_CIPHER");
       expect((err as Error).message).toBe(
         "CIPHER TEXT HAS BEEN LOCALLY ENTERED. COMMUNICATIONS DENIED.",
       );
     }
   });
 
-  it("plain text is always transmittable (no rule)", () => {
+  // MANUAL p.53 Appendix B — warn_plain_tx: the device refuses to transmit
+  // anything still in plaintext form so an operator who forgot to press E
+  // cannot put the message on the wire in the clear.
+  it("denies transmission of empty PLAIN slot with reason=PLAIN", () => {
     const d = new DualBuffer();
-    expect(() => d.assertTransmittable("A")).not.toThrow();
+    try {
+      d.assertTransmittable("A");
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(TransmitDeniedError);
+      expect((err as TransmitDeniedError).reason).toBe("PLAIN");
+      expect((err as Error).message).toBe(
+        "MESSAGE IN PLAIN TEXT FORM. COMMUNICATIONS DENIED.",
+      );
+    }
+  });
+
+  it("denies transmission of typed PLAIN slot with reason=PLAIN", () => {
+    const d = new DualBuffer();
     d.get("A").buffer.insertString("HELLO");
-    expect(() => d.assertTransmittable("A")).not.toThrow();
+    try {
+      d.assertTransmittable("A");
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(TransmitDeniedError);
+      expect((err as TransmitDeniedError).reason).toBe("PLAIN");
+    }
+  });
+
+  // Decrypting a received slot flips it back to PLAIN with origin=DECRYPTED.
+  // Retransmitting that plaintext would bypass the whole point of the device,
+  // so the PLAIN rule must fire regardless of provenance.
+  it("denies transmission of DECRYPTED plaintext with reason=PLAIN", () => {
+    const d = new DualBuffer();
+    d.markReceived("A");
+    d.markDecrypted("A");
+    try {
+      d.assertTransmittable("A");
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(TransmitDeniedError);
+      expect((err as TransmitDeniedError).reason).toBe("PLAIN");
+    }
   });
 });
