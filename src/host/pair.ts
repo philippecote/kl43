@@ -36,6 +36,7 @@ import {
   startReceiverFromNode,
   BELL103_ORIGINATE,
   BELL103_ANSWER,
+  mapRxByteToReviewChar,
   type FreqPair,
   type ReceiverHandle,
   type TransmitHandle,
@@ -291,15 +292,11 @@ function startListening(s: Station): void {
     const rx = startReceiverFromNode(s.rxInput, s.rxPair);
     s.receiver = rx;
     rx.onByte((b, erased) => {
-      if (erased) {
-        // Clock-lock emitted an erasure marker for a lost byte — surface
-        // it as a literal '?' so the operator sees the dropout location.
-        s.rxBuffer += "?";
-      } else if (b >= 0x20 && b < 0x7f) {
-        s.rxBuffer += String.fromCharCode(b);
-      } else if (b === 0x0a || b === 0x0d) {
-        s.rxBuffer += "\n";
-      }
+      // Every received byte contributes exactly one character to the
+      // Review buffer. Erasures and off-alphabet corruptions both
+      // surface as '?' so the operator sees the drop position and
+      // Reed–Solomon still sees byte-aligned substitutions downstream.
+      s.rxBuffer += mapRxByteToReviewChar(b, erased);
       s.machine.rxCarrierDetected();
       s.render();
       if (s.rxSilenceTimer) clearTimeout(s.rxSilenceTimer);

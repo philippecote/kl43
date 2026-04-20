@@ -186,6 +186,42 @@ export type ReceiverHandle = {
   onByte: (cb: (b: number, erased: boolean) => void) => void;
 };
 
+/**
+ * Map a raw received byte (plus the UART's `erased` flag) to the single
+ * character we append to the Review buffer.
+ *
+ * The transmitter's alphabet is intentionally narrow: display-formatted
+ * wire text is A–Z, 2–7, and ASCII space (0x20). Anything else arriving
+ * at the RX handler — lowercase, digits outside 2-7, punctuation,
+ * non-printable control bytes, high-bit bytes — is a channel-level
+ * corruption of one of those expected bytes. Returning `'?'` for all of
+ * them keeps the Review display byte-aligned with what the transmitter
+ * intended to send, so `filterToBase32PreservingErasures` can later map
+ * each `?` back to a zero-bit base32 symbol and RS-decoding stays
+ * aligned. Silently dropping an unknown byte (as the old handler did)
+ * would shift every subsequent base32 symbol by one and cascade into
+ * every downstream codeword.
+ *
+ * Erasures flagged by the UART (`erased=true`) always map to `?`
+ * regardless of the byte value — the byte is already 0x3F but being
+ * explicit guards against future UART changes.
+ */
+export function mapRxByteToReviewChar(b: number, erased: boolean): string {
+  if (erased) return "?";
+  // A–Z
+  if (b >= 0x41 && b <= 0x5a) return String.fromCharCode(b);
+  // a–z — the wire alphabet is uppercase but be forgiving; the base32
+  // filter uppercases before decoding anyway.
+  if (b >= 0x61 && b <= 0x7a) return String.fromCharCode(b).toUpperCase();
+  // 2–7 (base32 digit range)
+  if (b >= 0x32 && b <= 0x37) return String.fromCharCode(b);
+  // Space — the group separator.
+  if (b === 0x20) return " ";
+  // Anything else is corruption. Surface it as an erasure so the
+  // operator sees the drop position and RS sees a zero-bit substitution.
+  return "?";
+}
+
 // URL flag ?debug=modem dumps per-detection stats (throttled) so we can see
 // what the gate is seeing in real deployments.
 const DEBUG_MODEM =
@@ -453,6 +489,19 @@ function buildDemodCore(
   // detection and simply re-enter DATA with nextTarget aligned to
   // expectedEdge + 0.5*spb.
   let lockedNeedsEdge = true;
+  // Consecutive LOCKED timeouts — each one emits a '?' erasure, advances
+  // the bit clock, and stays in LOCKED so we keep trying to find the next
+  // byte in its predicted slot. After MAX_LOCKED_MISSES in a row we give
+  // up the clock lock and fall to IDLE, which is what a real EOM (the
+  // transmitter's 100 ms post-mark tail followed by silence) looks like
+  // from LOCKED's perspective and which the `energy < absFloor()` check
+  // ordinarily catches first on a clean carrier drop. Capping emissions
+  // bounds the number of spurious '?' chars at the tail of a successful
+  // message — they map to base32 'A' (0x00) and land inside the
+  // shortened-codeword zero-pad region, so they don't corrupt RS so long
+  // as total wire length stays under one 255-byte codeword.
+  let consecutiveLockedMisses = 0;
+  const MAX_LOCKED_MISSES = 2;
   const scanStep = Math.max(1, Math.round(spb / 16));
 
   // Acceptance window around expectedEdge in LOCKED. EARLY covers small
@@ -617,6 +666,11 @@ function buildDemodCore(
           expectedEdge = lastStartEdge + Math.round(10 * spb);
           lockedLastBit = 1;
           state = "LOCKED";
+          // We reached a stop-bit sample (clean byte or framing-error
+          // erasure). Either way the byte-clock is still in sync with
+          // the transmitter, so reset the LOCKED-miss counter — the
+          // previous gap, if any, has been bridged.
+          consecutiveLockedMisses = 0;
         }
       } else {
         // LOCKED: bit-clock is locked to lastStartEdge. Two resync
@@ -633,18 +687,48 @@ function buildDemodCore(
         const energy = windowEnergy(centerIdx);
         if (energy < absFloor()) {
           // Carrier gone. End of message or line dropped — relinquish
-          // the clock lock and go back to passive scanning.
+          // the clock lock and go back to passive scanning. No erasure
+          // emitted here: silence is a clean EOM, not a lost byte.
           state = "IDLE";
           lastIdle = 1;
+          consecutiveLockedMisses = 0;
           continue;
         }
         if (centerIdx > expectedEdge + LATE_TOLERANCE_SAMPLES) {
-          // No start-bit edge arrived within tolerance. In practice this
-          // is the transmitter's post-data mark (carrier still on, just
-          // no more data bits) — treat as EOM. The rxSilenceTimer in the
-          // host finishes the job of flushing the buffer.
-          state = "IDLE";
-          lastIdle = 1;
+          // No start-bit edge arrived inside the acceptance window. The
+          // carrier is still up (we passed the energy gate above), so
+          // something SHOULD have been transmitted in this slot and we
+          // missed it. Most common causes: a start-bit bit-flip to mark
+          // (no mark→space edge at all), a noise glitch that made the
+          // detector reject the real edge, or — on the tail of a
+          // successful message — the transmitter's post-data mark.
+          //
+          // Emit a position-preserving erasure for the missed slot and
+          // advance the bit clock by one byte-period so we stay locked
+          // to the transmitter's frame grid. Use edge-based resync for
+          // the NEXT slot: if there's another real byte coming, its
+          // start bit will produce a proper mark→space edge at the new
+          // expectedEdge. If instead this was real EOM (transmitter's
+          // post-mark tail), the line stays solid mark — edge detection
+          // quietly does nothing and we time out again, eventually
+          // hitting MAX_LOCKED_MISSES and falling to IDLE. Using
+          // clock-only resync here would instead sample 8 mark samples
+          // as "data" and emit a phantom 0xFF byte.
+          onByteCb(0x3f, true);
+          consecutiveLockedMisses++;
+          lastStartEdge = expectedEdge;
+          expectedEdge = lastStartEdge + Math.round(10 * spb);
+          lockedNeedsEdge = true;
+          lockedLastBit = 1;
+          if (consecutiveLockedMisses >= MAX_LOCKED_MISSES) {
+            // Hopelessly off-grid, or a real EOM with a long mark tail.
+            // Give up the lock. The host-side rxSilenceTimer flushes
+            // the buffer; subsequent audio (if any) re-acquires from
+            // IDLE.
+            state = "IDLE";
+            lastIdle = 1;
+            consecutiveLockedMisses = 0;
+          }
           continue;
         }
         if (!lockedNeedsEdge) {

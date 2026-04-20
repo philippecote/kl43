@@ -104,30 +104,62 @@ export function filterToBase32(input: string): string {
 export const BASE32_ERASURE_MARKER = "?";
 
 /**
- * Receive-side filter: keep A-Z + 2-7, map the erasure marker to 'A'
- * (base32 symbol for 0b00000), drop everything else.
+ * Receive-side filter: keep A-Z + 2-7, map the erasure marker and any
+ * other non-alphabet, non-formatting character to 'A' (base32 symbol
+ * for 0b00000). Spaces, newlines/CR, tabs, and the `=` pad character
+ * are the only things dropped silently.
  *
  * Position preservation is the whole point. `filterToBase32` (used by
  * the interactive cipher-text editor) silently drops unknown characters,
  * which on the wire would turn a single lost byte into a 5-bit shift
  * for every subsequent base32 symbol in the codeword — Reed–Solomon
- * doesn't recover from shifts. By mapping '?' to 'A' here, one lost UART
- * byte corrupts at most two adjacent codeword bytes (5 bits lands on a
- * byte boundary, so it disturbs the byte it overlaps plus possibly the
- * next), which is comfortably inside RS(255,223)'s 16-error budget.
+ * doesn't recover from shifts. By mapping '?' (and any other stray
+ * printable character the host may have let through) to 'A' here, one
+ * lost UART byte corrupts at most two adjacent codeword bytes (5 bits
+ * lands on a byte boundary, so it disturbs the byte it overlaps plus
+ * possibly the next), which is comfortably inside RS(255,223)'s
+ * 16-error budget.
  *
- * Any character that is neither base32 nor the erasure marker (e.g. a
- * stray space or newline or the `=` pad introduced by grouping) is
- * silently dropped, matching `filterToBase32`'s behaviour.
+ * Defensive mapping of unknown chars → 'A' matters because the host-
+ * side `mapRxByteToReviewChar` is supposed to catch off-alphabet bytes
+ * upstream, but any future code path that writes into the Review buffer
+ * (clipboard paste, share-link import, manual edit) could reintroduce
+ * a `\`, `;`, `!`, etc. Silently dropping those would resurrect the
+ * bit-shift failure mode we worked so hard to eliminate.
  */
 export function filterToBase32PreservingErasures(input: string): string {
   let out = "";
   for (const ch of input.toUpperCase()) {
-    if (ch === BASE32_ERASURE_MARKER) {
-      out += "A";
-    } else if (DECODE_TABLE[ch] !== undefined) {
+    if (DECODE_TABLE[ch] !== undefined) {
       out += ch;
+      continue;
     }
+    // Formatting / structural characters: these are either emitted by
+    // `groupForDisplay` (spaces, padding), tolerated by base32Decode,
+    // or conventionally used by operators hand-copying ciphertext on
+    // paper (dashes between groups — "ABC-DEF-GHI"). They carry no
+    // positional information so dropping them doesn't cause a shift.
+    //
+    // Any byte received over the modem that was originally one of these
+    // separators would have been translated upstream by
+    // `mapRxByteToReviewChar` (host-side RX handler) — spaces survive
+    // as spaces, and '-' (0x2D) would have been turned into '?' since
+    // it's not in the TX alphabet. So dropping '-' here is only ever
+    // reached on the hand-entry / paste code path.
+    if (
+      ch === " " ||
+      ch === "\n" ||
+      ch === "\r" ||
+      ch === "\t" ||
+      ch === "-" ||
+      ch === BASE32_PAD
+    ) {
+      continue;
+    }
+    // Explicit erasure marker from the UART, OR any other character
+    // the host somehow let through. Treat both as a position-preserving
+    // erasure (zero-bit base32 symbol) rather than dropping.
+    out += "A";
   }
   return out;
 }

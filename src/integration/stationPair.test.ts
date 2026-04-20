@@ -304,6 +304,68 @@ describe("station pair — '?' erasure markers from modem drops", () => {
     );
   });
 
+  it("decrypts despite non-base32 corruption in the body (backslash, semicolon, punctuation)", () => {
+    // This is the second failure mode the user reported: not a '?' but
+    // a stray '\\', ';', or digit-outside-2-7 appearing in the Review
+    // text. Those came from host-side byte mappings that silently
+    // dropped off-alphabet bytes (breaking byte alignment) OR from the
+    // base32 filter silently dropping them downstream. The fix routes
+    // both paths to 'A' so the base32 stream stays aligned, exactly
+    // like a modem erasure marker.
+    const a = makeStation(1, "A", keyLetters);
+    const b = makeStation(1, "B", keyLetters);
+    const plaintext = "HELLO, WORLD!";
+    const encrypted = encryptMessage(a.compartment, a.backend, plaintext, randomBytes);
+    const wire = formatForDisplay(encrypted);
+
+    const positions = bodyBase32Positions(wire);
+    // Three injection points — one each of the weird characters the
+    // user saw in their Review text.
+    const picks = [
+      { pos: positions[Math.floor(positions.length * 0.3)]!, ch: "\\" },
+      { pos: positions[Math.floor(positions.length * 0.5)]!, ch: ";" },
+      { pos: positions[Math.floor(positions.length * 0.7)]!, ch: "!" },
+    ];
+    let corrupted = wire;
+    for (const { pos, ch } of picks) {
+      corrupted = corrupted.slice(0, pos) + ch + corrupted.slice(pos + 1);
+    }
+    expect(corrupted).toContain("\\");
+    expect(corrupted).toContain(";");
+    expect(corrupted).toContain("!");
+    // Length is preserved — defensive substitution, not deletion.
+    expect(corrupted.length).toBe(wire.length);
+
+    const received = parseDisplayForm(corrupted);
+    expect(decryptMessage(b.compartment, b.backend, received)).toBe(plaintext);
+  });
+
+  it("decrypts under mixed '?' + punctuation corruption (property)", () => {
+    // Stress the base32 filter's defensive mapping: drops can appear as
+    // any of several characters depending on which host-side code path
+    // the corruption came through. A single injection per run stays
+    // well inside the RS(255,223) 16-error budget regardless of which
+    // flavour of corruption it is.
+    const a = makeStation(1, "A", keyLetters);
+    const b = makeStation(1, "B", keyLetters);
+    const plaintext = "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG";
+    const encrypted = encryptMessage(a.compartment, a.backend, plaintext, randomBytes);
+    const wire = formatForDisplay(encrypted);
+    const positions = bodyBase32Positions(wire);
+    fc.assert(
+      fc.property(
+        fc.nat({ max: positions.length - 1 }),
+        fc.constantFrom("?", "\\", ";", "!", "1", "0", "@"),
+        (i, ch) => {
+          const corrupted = wire.slice(0, positions[i]!) + ch + wire.slice(positions[i]! + 1);
+          const received = parseDisplayForm(corrupted);
+          expect(decryptMessage(b.compartment, b.backend, received)).toBe(plaintext);
+        },
+      ),
+      { numRuns: 30 },
+    );
+  });
+
   it("rejects a '?' planted inside the MI header", () => {
     // The MI has no FEC (it's the ciphertext's IV, must be transmitted
     // verbatim), so a modem drop inside the header is not recoverable.

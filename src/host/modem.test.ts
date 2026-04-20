@@ -91,11 +91,32 @@ function captureAll(samples: Float32Array, pair: FreqPair = BELL103_ORIGINATE): 
   return out;
 }
 
+/**
+ * The LOCKED state emits up to MAX_LOCKED_MISSES (currently 2) `?` erasures
+ * when the carrier is still on but no start-bit edge arrives in the
+ * predicted slot — which is exactly what the transmitter's post-data mark
+ * tail looks like at EOM. Real EOM is bounded (the rxSilenceTimer in the
+ * host flushes the buffer), but from inside a unit test we don't have that
+ * timer, so these EOM erasures surface in `rx`. Callers who only care about
+ * the emitted *payload* bytes can trim them off.
+ */
+function stripTrailingEomErasures(rx: Captured[]): Captured[] {
+  const out = rx.slice();
+  while (
+    out.length > 0 &&
+    out[out.length - 1]!.erased &&
+    out[out.length - 1]!.b === 0x3f
+  ) {
+    out.pop();
+  }
+  return out;
+}
+
 describe("createUartDemodulator — clean channel", () => {
   it("decodes a short ASCII byte stream byte-for-byte", () => {
     const bytes = new TextEncoder().encode("HELLO");
     const samples = synthesize({ sampleRate: SAMPLE_RATE, pair: BELL103_ORIGINATE, bytes });
-    const rx = captureAll(samples);
+    const rx = stripTrailingEomErasures(captureAll(samples));
     expect(rx.map((r) => r.b)).toEqual(Array.from(bytes));
     expect(rx.every((r) => !r.erased)).toBe(true);
   });
@@ -108,7 +129,7 @@ describe("createUartDemodulator — clean channel", () => {
     // edges outside expectedEdge are ignored.
     const bytes = new Uint8Array([0xaa, 0x55, 0xaa, 0x55, 0xaa]);
     const samples = synthesize({ sampleRate: SAMPLE_RATE, pair: BELL103_ORIGINATE, bytes });
-    const rx = captureAll(samples);
+    const rx = stripTrailingEomErasures(captureAll(samples));
     expect(rx.length).toBe(bytes.length);
     expect(rx.map((r) => r.b)).toEqual(Array.from(bytes));
   });
@@ -117,8 +138,31 @@ describe("createUartDemodulator — clean channel", () => {
     const bytes = new Uint8Array(40);
     for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 17 + 3) & 0xff; // pseudo-random
     const samples = synthesize({ sampleRate: SAMPLE_RATE, pair: BELL103_ORIGINATE, bytes });
-    const rx = captureAll(samples);
+    const rx = stripTrailingEomErasures(captureAll(samples));
     expect(rx.map((r) => r.b)).toEqual(Array.from(bytes));
+  });
+
+  it("emits at most MAX_LOCKED_MISSES (= 2) spurious '?' erasures at EOM", () => {
+    // When the transmitter stops sending data but the carrier is still up
+    // (the post-data mark tail), LOCKED has no way of distinguishing "line
+    // went quiet" from "byte was lost" until it's missed enough slots to
+    // give up. We've capped that at MAX_LOCKED_MISSES, so real EOM
+    // produces a bounded number of trailing '?' erasures and no phantom
+    // 0xFF bytes.
+    const bytes = new TextEncoder().encode("HELLO");
+    const samples = synthesize({
+      sampleRate: SAMPLE_RATE,
+      pair: BELL103_ORIGINATE,
+      bytes,
+      postBits: 40, // plenty of time for timeouts to fire
+    });
+    const rx = captureAll(samples);
+    const tailErasures = rx.slice(bytes.length);
+    expect(tailErasures.length).toBeLessThanOrEqual(2);
+    for (const t of tailErasures) {
+      expect(t.erased).toBe(true);
+      expect(t.b).toBe(0x3f);
+    }
   });
 });
 
@@ -138,7 +182,7 @@ describe("createUartDemodulator — dropped bytes (framing error)", () => {
         return m;
       },
     });
-    const rx = captureAll(samples);
+    const rx = stripTrailingEomErasures(captureAll(samples));
     expect(rx.length).toBe(bytes.length);
     expect(rx[0]).toEqual({ b: 0x41, erased: false });
     expect(rx[1]).toEqual({ b: 0x42, erased: false });
@@ -166,7 +210,7 @@ describe("createUartDemodulator — dropped bytes (framing error)", () => {
         return m;
       },
     });
-    const rx = captureAll(samples);
+    const rx = stripTrailingEomErasures(captureAll(samples));
     expect(rx.length).toBe(bytes.length);
     expect(rx[0]!.b).toBe(0x41);
     expect(rx[0]!.erased).toBe(false);
@@ -189,7 +233,7 @@ describe("createUartDemodulator — dropped bytes (framing error)", () => {
         return m;
       },
     });
-    const rx = captureAll(samples);
+    const rx = stripTrailingEomErasures(captureAll(samples));
     expect(rx.length).toBe(bytes.length);
     for (let i = 0; i < bytes.length; i++) {
       if (dropIdxs.has(i)) {
@@ -200,6 +244,90 @@ describe("createUartDemodulator — dropped bytes (framing error)", () => {
         expect(rx[i]!.b).toBe(bytes[i]!);
       }
     }
+  });
+});
+
+describe("createUartDemodulator — missed start bit (LOCKED timeout)", () => {
+  // This second failure mode is what the user saw as "groups of 2 chars,
+  // no question mark". A bit flip that turns the start bit from space to
+  // mark leaves the line in mark all the way through the missed byte, so
+  // DATA never enters — only LOCKED times out and notices. Before this
+  // fix, LOCKED silently fell back to IDLE, the byte disappeared, and
+  // everything after shifted by one base32 symbol.
+
+  it("emits a '?' erasure at the correct position when a start bit is flipped to mark", () => {
+    const bytes = new Uint8Array([0x41, 0x42, 0x43, 0x44, 0x45]);
+    const samples = synthesize({
+      sampleRate: SAMPLE_RATE,
+      pair: BELL103_ORIGINATE,
+      bytes,
+      // Corrupt byte 2's start bit to mark → the entire frame looks like
+      // mark + 8 data bits + mark, which the LOCKED state sees as "no
+      // edge arrived in the expected slot" and must handle by emitting
+      // an erasure and advancing the clock.
+      mutateFrame: (i, frame) => {
+        if (i !== 2) return null;
+        const m = [...frame];
+        m[0] = 1;
+        // The 8 data bits of 0x43 = 0b01000011 LSB-first are
+        // [1,1,0,0,0,0,1,0]. Force them all to mark so the line is
+        // solid mark throughout the frame, forcing the pure
+        // "timeout in LOCKED" path rather than an accidental edge
+        // inside the frame.
+        for (let k = 1; k <= 8; k++) m[k] = 1;
+        return m;
+      },
+    });
+    const rx = stripTrailingEomErasures(captureAll(samples));
+    expect(rx.length).toBe(bytes.length);
+    expect(rx[0]).toEqual({ b: 0x41, erased: false });
+    expect(rx[1]).toEqual({ b: 0x42, erased: false });
+    expect(rx[2]!.erased).toBe(true);
+    expect(rx[2]!.b).toBe(0x3f);
+    expect(rx[3]).toEqual({ b: 0x44, erased: false });
+    expect(rx[4]).toEqual({ b: 0x45, erased: false });
+  });
+
+  it("emits '?' erasures for two consecutive bytes when both start bits are flipped", () => {
+    // Two back-to-back missed bytes: the LOCKED state must emit an
+    // erasure for each slot, advance the clock twice, and still be in
+    // sync for the surviving bytes that follow. Because
+    // MAX_LOCKED_MISSES = 2, this is the boundary case: exactly two
+    // consecutive misses still lets the clock lock recover if the third
+    // slot is a real byte.
+    const bytes = new Uint8Array([0x41, 0x42, 0x43, 0x44, 0x45]);
+    const dropIdxs = new Set([1, 2]);
+    const samples = synthesize({
+      sampleRate: SAMPLE_RATE,
+      pair: BELL103_ORIGINATE,
+      bytes,
+      mutateFrame: (i, frame) => {
+        if (!dropIdxs.has(i)) return null;
+        const m = [...frame];
+        m[0] = 1;
+        for (let k = 1; k <= 8; k++) m[k] = 1;
+        return m;
+      },
+    });
+    const rx = captureAll(samples);
+    // After 2 consecutive LOCKED timeouts we give up the lock and fall
+    // to IDLE. Byte 3 (0x44) will then be re-acquired cold from IDLE
+    // on its start edge, which still works — just without clock-lock
+    // assistance. Assert the *first three* bytes (0x41, '?', '?') are
+    // present and byte 0x43's position has the erasure marker.
+    expect(rx[0]).toEqual({ b: 0x41, erased: false });
+    expect(rx[1]!.erased).toBe(true);
+    expect(rx[1]!.b).toBe(0x3f);
+    expect(rx[2]!.erased).toBe(true);
+    expect(rx[2]!.b).toBe(0x3f);
+    // After dropping out of LOCKED we re-acquire from IDLE on the next
+    // real byte. The important contract is that NO phantom 0xFF bytes
+    // show up between the '?' erasures and the real 0x44.
+    const rest = rx.slice(3);
+    const real = rest.filter((r) => !r.erased);
+    expect(real.map((r) => r.b)).toEqual([0x44, 0x45]);
+    // No 0xFF phantoms inside the post-timeout gap.
+    expect(rx.every((r) => r.b !== 0xff)).toBe(true);
   });
 });
 

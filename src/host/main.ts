@@ -19,6 +19,7 @@ import {
   transmitText,
   startReceiver,
   BELL103_ORIGINATE,
+  mapRxByteToReviewChar,
   type ReceiverHandle,
   type TransmitHandle,
 } from "./modem.js";
@@ -120,20 +121,16 @@ async function startListeningForRx(): Promise<void> {
     console.log("[kl43] RX: listening on originate pair (1270/1070 Hz)");
     receiver.onByte((b, erased) => {
       const ch = b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : `\\x${b.toString(16)}`;
+      const mapped = mapRxByteToReviewChar(b, erased);
       console.log(
-        `[kl43] RX byte: 0x${b.toString(16).padStart(2, "0")} (${ch})${erased ? " [ERASURE]" : ""}`,
+        `[kl43] RX byte: 0x${b.toString(16).padStart(2, "0")} (${ch})${erased ? " [ERASURE]" : ""}${!erased && mapped === "?" ? " [NON-ALPHABET → ?]" : ""}`,
       );
-      if (erased) {
-        // Clock-lock detected a lost byte at this position. Append the
-        // literal '?' marker so the operator can see where the channel
-        // hiccupped; the base32 receive-side filter converts it to a
-        // zero-bit symbol so RS still sees byte-aligned substitutions.
-        rxBuffer += "?";
-      } else if (b >= 0x20 && b < 0x7f) {
-        rxBuffer += String.fromCharCode(b);
-      } else if (b === 0x0a || b === 0x0d) {
-        rxBuffer += "\n";
-      }
+      // Every received byte contributes exactly one character to the
+      // Review buffer — either the real base32 symbol / space, or '?'
+      // for erasures and off-alphabet corruptions. Silent drops here
+      // (the old behaviour) shifted every subsequent symbol by one and
+      // broke RS alignment.
+      rxBuffer += mapped;
       // Flip the LCD from "Waiting for Carrier…" to "Receiving Message" on
       // the very first demodulated byte, instead of only after end-of-
       // carrier. rxCarrierDetected() is idempotent and safe to call per byte.

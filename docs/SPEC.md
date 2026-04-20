@@ -458,22 +458,27 @@ RS(255,223) corrects **substitutions** at unknown positions: a single dropped or
 
 The receiver's UART is a three-state machine: **IDLE → DATA → LOCKED → DATA → …**. On the first byte of a transmission it acquires the start-bit edge coarsely in IDLE. After sampling the 10 bits of an 8-N-1 frame it enters LOCKED, holding a bit-clock locked to that byte's start-bit sample index. From LOCKED it predicts the *next* byte's start bit at exactly `lastStartEdge + 10 × spb` (sample-per-bit) and accepts an edge only inside a narrow acceptance window around that prediction.
 
-Two outcomes are possible at the stop-bit sample of each byte:
+Three outcomes are possible at the stop-bit sample (or expected start-bit sample) of each byte:
 
-| Stop bit | Action | Next LOCKED mode |
+| Trigger | Action | Next LOCKED mode |
 |---|---|---|
-| Mark (clean) | Emit `(byte, erased=false)` | Edge-based resync — hunt for the mark→space transition of the next byte inside `[expectedEdge − 0.5×spb, expectedEdge + 3×spb]`, walk back narrow to pin the exact edge, absorb small clock jitter |
-| Space (framing error) | Emit `(0x3F, erased=true)` — ASCII `?` | Clock-only resync — the line is continuously space through the erased stop bit and into the next start bit, so no mark→space edge exists at `expectedEdge`; the receiver trusts the bit clock and re-enters DATA at `expectedEdge + 0.5×spb` |
+| Stop bit = mark (clean) | Emit `(byte, erased=false)` | Edge-based resync — hunt for the mark→space transition of the next byte inside `[expectedEdge − 0.5×spb, expectedEdge + 3×spb]`, walk back narrow to pin the exact edge, absorb small clock jitter |
+| Stop bit = space (framing error) | Emit `(0x3F, erased=true)` — ASCII `?` | Clock-only resync — the line is continuously space through the erased stop bit and into the next start bit, so no mark→space edge exists at `expectedEdge`; the receiver trusts the bit clock and re-enters DATA at `expectedEdge + 0.5×spb` |
+| Start-bit edge missing in window (carrier still on) | Emit `(0x3F, erased=true)`, advance clock by one byte-period, increment `consecutiveLockedMisses`. After `MAX_LOCKED_MISSES` (currently 2) in a row, fall to IDLE. | Edge-based resync on the new slot — if another real byte is coming, its start bit produces the expected edge; if not, we time out again and eventually hit the miss cap |
+
+The third (start-bit-missing) path matters because a start-bit bit flip to mark is the second common channel corruption: the entire frame looks like mark + data + mark, so DATA never enters and only LOCKED notices. Before this path was added, LOCKED silently fell back to IDLE and the byte simply disappeared — no `?` marker, just a stream shift of one base32 symbol and a cascade of "uncorrectable errors" downstream. The user-visible symptom was "groups of 2 chars from time to time, no question mark".
+
+Bounding the miss counter matters because at real EOM (transmitter stopped sending, carrier still on for the post-mark tail) LOCKED cannot tell "byte lost" from "transmitter finished" until it's missed enough slots. Capping at `MAX_LOCKED_MISSES` keeps the spurious trailing `?` count bounded — currently ≤ 2 per message — and those extra `?`s map to zero-bit base32 symbols that sit inside the shortened-codeword zero-pad region, harmless to RS as long as total wire length stays under one 255-byte codeword (which the 2600-char plaintext cap guarantees).
 
 This matters because the Bell 103 channel's dominant failure mode — the one that used to produce "uncorrectable errors" reports downstream — is a single-byte drop on a noisy channel. Before the clock lock was added, a framing error silently dropped the byte and returned the UART to IDLE, where the coarse start-bit scanner often latched onto an internal data-bit transition of the *next* byte and emitted a phantom shifted byte. Either way the byte stream shifted by one and every subsequent codeword landed at the wrong offset — catastrophic for Reed-Solomon.
 
 With clock-lock:
 
-1. The receiver emits **exactly N callbacks for N transmitted UART frames**, even when some frames have framing errors.
+1. The receiver emits **exactly one callback per transmitted UART-frame position**, even when some frames have framing errors or missing start bits. Extra `?` callbacks only appear in the bounded tail of a message (≤ `MAX_LOCKED_MISSES`).
 2. Each lost byte surfaces as an erasure at its correct byte position, visible to the operator as a literal `?` in the Review section.
 3. Noise-triggered false transitions *between* bytes cannot produce phantom insertions, because LOCKED only accepts edges inside the acceptance window around `expectedEdge`.
-
-The downstream base32 decode path (`filterToBase32PreservingErasures` in [src/wire/Base32.ts](../src/wire/Base32.ts)) substitutes each `?` with `'A'` — the zero-bit base32 symbol — so codeword byte alignment is preserved for RS, which then treats the erasure as one of its ≤ 16 substitution errors per 255-byte codeword.
+4. Off-alphabet corruption (a received byte that isn't A-Z / 2-7 / space — e.g. the `\`, `;`, `!` characters users reported on low-SNR channels) is converted to `?` by [`mapRxByteToReviewChar`](../src/host/modem.ts) before it ever reaches the review buffer. Silent host-side drops would otherwise recreate the stream-shift failure mode after we just eliminated it at the UART layer.
+5. The downstream base32 decode path (`filterToBase32PreservingErasures` in [src/wire/Base32.ts](../src/wire/Base32.ts)) substitutes each `?` — and any other non-base32, non-structural character that slips through on paste / import paths — with `'A'`, the zero-bit base32 symbol. Spaces, newlines, tabs, `-` (the conventional hand-copy separator), and `=` (the RFC 4648 pad char) are the only characters still dropped silently because they carry no positional information.
 
 A `?` planted in the **MI header** (first 12 A-Z characters) is not recoverable: MI parsing is strict A-Z and the skipped position pulls in the next body character, corrupting the MI checksum and raising `InvalidMiError` at decrypt time. Erasures inside the MI are vanishingly rare on a real Bell 103 channel, but the contract is explicit: **erasures recover body corruption, not header corruption**.
 

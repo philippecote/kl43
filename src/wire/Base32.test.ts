@@ -128,40 +128,74 @@ describe("filterToBase32PreservingErasures (receive-side filter)", () => {
     expect(out).toBe("AABACA");
   });
 
-  it("still drops non-base32, non-'?' characters (spaces, punctuation)", () => {
-    // Spaces — which the transmitter puts between 3-char groups — are
-    // dropped as before; only '?' gets the position-preserving mapping.
-    expect(filterToBase32PreservingErasures("ABC ?EF")).toBe("ABCAEF");
-    expect(filterToBase32PreservingErasures("Hello, ?world!")).toBe("HELLOAWORLD");
+  it("drops spaces / newlines / tabs / dashes / '=' pad silently (structural, no position info)", () => {
+    // Grouping spaces come from `groupForDisplay`; they carry no
+    // positional information so dropping them doesn't shift the base32
+    // stream. '=' is the RFC 4648 pad char, also formatting-only.
+    // Dashes are the conventional hand-copy separator ("ABC-DEF-GHI")
+    // and can only reach this filter on the hand-entry path — the
+    // modem RX path converts any '-' to '?' upstream.
+    expect(filterToBase32PreservingErasures("ABC DEF")).toBe("ABCDEF");
+    expect(filterToBase32PreservingErasures("ABC\nDEF")).toBe("ABCDEF");
+    expect(filterToBase32PreservingErasures("ABC\tDEF")).toBe("ABCDEF");
+    expect(filterToBase32PreservingErasures("ABC\r\nDEF")).toBe("ABCDEF");
+    expect(filterToBase32PreservingErasures("ABC-DEF-GHI")).toBe("ABCDEFGHI");
+    expect(filterToBase32PreservingErasures("ABCDEFGH====")).toBe("ABCDEFGH");
   });
 
-  it("uppercases and strips disallowed like filterToBase32", () => {
+  it("maps off-alphabet printables to 'A' at the same position (defensive)", () => {
+    // This is the new defensive behaviour: any character that is neither
+    // a valid base32 symbol, nor formatting whitespace/padding, gets
+    // mapped to 'A'. This keeps the receive-side filter byte-aligned
+    // even when a stray '\\', ';', '!', digit outside 2-7, etc. slips
+    // through. Silent drops here would cascade into RS misalignment.
+    expect(filterToBase32PreservingErasures("AB\\DE")).toBe("ABADE");
+    expect(filterToBase32PreservingErasures("AB;DE")).toBe("ABADE");
+    expect(filterToBase32PreservingErasures("AB!DE")).toBe("ABADE");
+    expect(filterToBase32PreservingErasures("A1B0C")).toBe("AABAC");
+  });
+
+  it("uppercases valid base32 characters", () => {
     expect(filterToBase32PreservingErasures("abc234")).toBe("ABC234");
-    // '1' and '0' are base32-banned; still dropped.
-    expect(filterToBase32PreservingErasures("A1B0C")).toBe("ABC");
   });
 
   it("handles all-'?' input as all 'A's (all-zero-bit worst case)", () => {
     expect(filterToBase32PreservingErasures("????")).toBe("AAAA");
   });
 
-  it("degenerates to filterToBase32 when no '?' is present", () => {
+  it("preserves length modulo structural-character removal", () => {
+    // After stripping structural chars (whitespace / pad / hand-copy
+    // dash), each remaining input character maps to exactly one
+    // output character. This is what guarantees byte alignment
+    // downstream.
     fc.assert(
       fc.property(
-        fc.string({ maxLength: 64 }).filter((s) => !s.includes("?")),
+        fc.string({ minLength: 1, maxLength: 64 }),
         (s) => {
-          expect(filterToBase32PreservingErasures(s)).toBe(filterToBase32(s));
+          const upper = s.toUpperCase();
+          const structuralCount =
+            [...upper].filter(
+              (c) =>
+                c === " " ||
+                c === "\n" ||
+                c === "\r" ||
+                c === "\t" ||
+                c === "-" ||
+                c === "=",
+            ).length;
+          expect(filterToBase32PreservingErasures(s).length).toBe(
+            upper.length - structuralCount,
+          );
         },
       ),
     );
   });
 
-  it("each '?' shifts at most one output symbol away from the strict filter", () => {
+  it("each '?' shifts at most one output symbol away from the strict filter (valid alphabet only)", () => {
     // Invariant that makes the RS argument work: inserting a '?' into
     // an otherwise valid base32 sequence should only flip one symbol
     // (the 'A' standing in for the lost byte), not shift the remaining
-    // symbols. Compare output to the strict filter on the same input
-    // with the '?' stripped.
+    // symbols.
     fc.assert(
       fc.property(
         fc
@@ -175,6 +209,23 @@ describe("filterToBase32PreservingErasures (receive-side filter)", () => {
           expect(out.slice(0, i)).toBe(s.slice(0, i));
           expect(out[i]).toBe("A");
           expect(out.slice(i + 1)).toBe(s.slice(i));
+        },
+      ),
+    );
+  });
+
+  it("matches filterToBase32 only when the input contains no corruption chars", () => {
+    // The two filters diverge: filterToBase32 silently drops any
+    // non-alphabet char (suitable for an editor where the operator
+    // chose what they're typing), while filterToBase32PreservingErasures
+    // maps non-structural non-alphabet chars to 'A' (suitable for a
+    // noisy wire). They only agree when the input contains only
+    // base32 + structural chars.
+    fc.assert(
+      fc.property(
+        fc.stringMatching(/^[A-Z2-7 \n\t=-]*$/),
+        (s) => {
+          expect(filterToBase32PreservingErasures(s)).toBe(filterToBase32(s));
         },
       ),
     );

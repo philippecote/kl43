@@ -118,18 +118,22 @@ Status:
 - **Bell 103 FSK modem** (300 baud, full Goertzel demodulator) over
   WebAudio for real over-the-air acoustic coupling between two browsers,
   with a live-tunable receiver gate exposed in the Modem menu. The UART
-  receiver is **bit-clock locked** between bytes, so a single-byte drop
-  on a noisy channel turns into a position-preserving `?` erasure at
-  the exact right spot rather than a stream-wide shift that would
-  cascade into every subsequent codeword.
+  receiver is **bit-clock locked** between bytes: a framing error, a
+  missing start-bit edge, or an off-alphabet byte all surface as a
+  position-preserving `?` erasure at the exact right spot rather than
+  silently dropping and shifting every subsequent codeword.
 - Reed–Solomon FEC on the ciphertext stream, base32 (`A–Z + 2–7`) group
   framing, `ZZZZ` end-of-message sentinel. `?` markers in the Review
-  section are substituted with the zero-bit base32 symbol before RS
-  decoding, letting the decoder absorb them as ordinary substitution
-  errors within its 16-per-codeword budget.
-- 367+ unit tests covering cipher primitives, framing, state machine,
-  UART (clock-lock behaviour under drops), and two-station round-trip
-  integration.
+  section — along with any other non-base32, non-formatting character
+  that slips through on paste / import paths — are substituted with the
+  zero-bit base32 symbol before RS decoding, letting the decoder absorb
+  them as ordinary substitution errors within its 16-per-codeword
+  budget.
+- 374+ unit tests covering cipher primitives, framing, state machine,
+  UART (clock-lock behaviour under drops and start-bit losses,
+  bounded-tail EOM), off-alphabet host mapping, and two-station
+  round-trip integration with scattered erasures and punctuation
+  corruption.
 
 ---
 
