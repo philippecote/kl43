@@ -1,6 +1,24 @@
 // Mutable text buffer modelling one Message buffer on the KL-43C.
-// Capacity: 2600 chars (MANUAL p.10). Insert/delete operations mirror the
-// device's key semantics:
+//
+// Two caps apply:
+//   - MAX_PLAINTEXT_CHARS (2600, MANUAL p.10) is what the operator can type
+//     in plaintext mode. Beyond that, the 2601st keypress beeps and is
+//     ignored — this is the "2600 chars per buffer" figure the manual
+//     quotes, and it applies to the Red (plaintext) side of the editor.
+//   - MAX_BUFFER_CHARS is the physical storage cap. Ciphertext display form
+//     (MI + RS-parity + base32 + 3-char group spaces) expands to roughly
+//     2.5× the plaintext, so a 2600-char plaintext encrypts to ~6400 chars
+//     of display form. The buffer has to hold that too — the receiver
+//     needs to be able to hand-type a sender's 6400-char ciphertext back
+//     in, and `performEncrypt` writes the display form into the same
+//     slot. We size the storage generously so spec §9.5 / §11 round-trip
+//     of a maxed 2600-char plaintext works on every backend.
+//
+// Both limits are enforced here; callers pick which cap applies (the
+// Machine's WP_EDITOR uses MAX_PLAINTEXT_CHARS in PLAIN mode and
+// MAX_BUFFER_CHARS in CIPHER mode).
+//
+// Insert/delete operations mirror the device's key semantics:
 //
 //   DCH  — delete character to the LEFT of the cursor      (MANUAL p.13)
 //   DWD  — delete word to the RIGHT of the cursor          (MANUAL p.13)
@@ -15,7 +33,17 @@
 // itself stores only the raw character stream. Hard newlines come from
 // ENTER; soft wrap is recomputed as lines change.
 
-export const MAX_BUFFER_CHARS = 2600;
+/** Plaintext-entry cap per MANUAL p.10. */
+export const MAX_PLAINTEXT_CHARS = 2600;
+/**
+ * Physical buffer cap. Sized to hold the display form of a maxed
+ * plaintext through the worst-case backend expansion:
+ *   2600 plain → ~2608 cipher (DES PKCS#7) → +2 len prefix → RS(255,223)
+ *   padded to 12 × 223 = 2676 data bytes → wire 12×255 = 3060 bytes →
+ *   base32 ≈ 4896 chars → +grouping (~33%) ≈ 6517 chars → +MI (15) +
+ *   separator (1) ≈ 6533 chars. 8000 gives headroom for future backends.
+ */
+export const MAX_BUFFER_CHARS = 8000;
 export const LINE_WIDTH = 40;
 export const NEWLINE = "\n";
 

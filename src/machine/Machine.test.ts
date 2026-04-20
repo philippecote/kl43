@@ -17,6 +17,7 @@ import {
 import { renderScreen } from "./Screen.js";
 import { KeyCompartmentStore } from "../state/KeyCompartment.js";
 import { DualBuffer } from "../editor/DualBuffer.js";
+import { MAX_PLAINTEXT_CHARS } from "../editor/TextBuffer.js";
 import { decodeKey, appendChecksum } from "../crypto/KeyCodec.js";
 import { LfsrNlcBackend } from "../crypto/backends/LfsrNlcBackend.js";
 import { FakeClock } from "../state/Clock.js";
@@ -603,6 +604,37 @@ describe("Word Processor sub-machine (MANUAL pp.10–14)", () => {
     for (const ch of "AB19C/Z2") m.press({ kind: "char", ch });
     // 1 and 9 and / are dropped; everything else survives.
     expect(buffers.get("A").buffer.toString()).toBe("ABCZ2");
+  });
+
+  // MANUAL p.10: plaintext entry caps at 2600 chars; the 2601st keypress is
+  // ignored. This is the operator-facing limit, not the physical buffer.
+  it("plain editor stops accepting new chars at MAX_PLAINTEXT_CHARS", () => {
+    const { m, buffers } = build();
+    toWp(m);
+    m.press({ kind: "char", ch: "A" });
+    m.press({ kind: "tick", elapsedMs: 2000 });
+    m.press({ kind: "char", ch: "P" });
+    m.press({ kind: "key", key: "ENTER" });
+    buffers.get("A").buffer.insertString("X".repeat(MAX_PLAINTEXT_CHARS));
+    expect(buffers.get("A").buffer.length).toBe(MAX_PLAINTEXT_CHARS);
+    m.press({ kind: "char", ch: "Y" });
+    expect(buffers.get("A").buffer.length).toBe(MAX_PLAINTEXT_CHARS);
+    expect(buffers.get("A").buffer.toString().endsWith("XXX")).toBe(true);
+  });
+
+  // Receiver hand-typing a sender's encrypted form can exceed 2600 chars
+  // (a maxed plaintext expands to ~6400 chars of display form), so the
+  // cipher-entry editor must honour the larger physical buffer cap.
+  it("cipher editor can accept up to MAX_BUFFER_CHARS base32 chars", () => {
+    const { m, buffers } = build();
+    toWp(m);
+    m.press({ kind: "char", ch: "A" });
+    m.press({ kind: "tick", elapsedMs: 2000 });
+    m.press({ kind: "char", ch: "C" });
+    buffers.get("A").buffer.insertString("A".repeat(MAX_PLAINTEXT_CHARS + 100));
+    expect(buffers.get("A").buffer.length).toBe(MAX_PLAINTEXT_CHARS + 100);
+    m.press({ kind: "char", ch: "B" });
+    expect(buffers.get("A").buffer.length).toBe(MAX_PLAINTEXT_CHARS + 101);
   });
 
   it("DCH in editor deletes the last typed char", () => {

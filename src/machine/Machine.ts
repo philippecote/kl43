@@ -28,6 +28,7 @@ import {
   TransmitDeniedError,
   type SlotId,
 } from "../editor/DualBuffer.js";
+import { MAX_BUFFER_CHARS, MAX_PLAINTEXT_CHARS } from "../editor/TextBuffer.js";
 import { Clock, SystemClock } from "../state/Clock.js";
 import { CryptoBackend } from "../crypto/CryptoBackend.js";
 import { LfsrNlcBackend } from "../crypto/backends/LfsrNlcBackend.js";
@@ -1625,7 +1626,12 @@ export class Machine {
           // Plain text accepts any printable char as-is; device is
           // uppercase-only per MANUAL p.12 note.
           : (event.ch.length === 1 ? event.ch.toUpperCase() : null);
-        if (ch !== null && buf.length < 2600) {
+        // PLAIN mode caps at MANUAL p.10's 2600-char limit; CIPHER mode
+        // (operator re-entering a received ciphertext) can hold up to the
+        // physical buffer size — a maxed plaintext encrypts to ~6400 chars
+        // of display form and the receiver has to be able to type it back.
+        const cap = s.mode === "CIPHER" ? MAX_BUFFER_CHARS : MAX_PLAINTEXT_CHARS;
+        if (ch !== null && buf.length < cap) {
           buf.insertChar(ch);
         }
       }
