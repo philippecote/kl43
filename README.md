@@ -189,7 +189,8 @@ acquisition.
 The background plate and several UI reference images used in this project
 are photographs of a real KL-43C that appear on the Crypto Museum website.
 
-> **Image © Crypto Museum (cryptomuseum.com). Used with permission.**
+> **Image © Crypto Museum (cryptomuseum.com). Used with the express
+> permission of Paul Reuvers, Curator (April 2026).**
 > Source: <https://www.cryptomuseum.com/crypto/usa/kl43/>
 
 Crypto Museum is a non-profit foundation dedicated to preserving the

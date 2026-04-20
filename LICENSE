@@ -23,7 +23,11 @@ SOFTWARE.
 ---
 
 NOTE: This MIT licence applies to the source code in this repository only.
-Third-party images and documentation referenced in the README (notably those
-courtesy of Crypto Museum, cryptomuseum.com) remain the property of their
-respective owners and are not covered by this licence. See README.md for
+Third-party images and documentation referenced in the README remain the
+property of their respective owners and are not covered by this licence.
+In particular, the KL-43C front-panel photograph used as the device
+background is © Crypto Museum (cryptomuseum.com) and is reproduced here
+with the express permission of Paul Reuvers, Curator (April 2026); that
+permission extends to this project only and does not grant downstream
+users any right to redistribute the image. See README.md for full
 attribution details.
