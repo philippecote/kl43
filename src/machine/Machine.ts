@@ -66,8 +66,6 @@ export const UPDATE_COMPLETE_MS = 800;
 export const KEY_INVALID_MS = 1_000;
 /** Print busy screen dwell. */
 export const PRINT_BUSY_MS = 1_000;
-/** Transmit busy screen dwell. */
-export const TX_BUSY_MS = 1_000;
 /** Receive "busy" dwell once carrier is detected. */
 export const RX_BUSY_MS = 1_000;
 /** "Please Wait" dwell between baud select and C_TX_READY (MANUAL p.29). */
@@ -252,7 +250,14 @@ export type State =
   | { kind: "C_TX_PLEASE_WAIT"; slot: SlotId; baudIndex: number; remainingMs: number }
   | { kind: "C_RX_BAUD_SELECT"; baudIndex: number }  // DIGITAL RX, MANUAL p.37
   | { kind: "C_TX_READY"; slot: SlotId; mode: "AUDIO" | "DIGITAL" }
-  | { kind: "C_TX_BUSY"; slot: SlotId; mode: "AUDIO" | "DIGITAL"; remainingMs: number }
+  // `C_TX_BUSY` is held open for the entire duration the modem is actually
+  // transmitting — we emit `txTransmitted` on entry, start the audio
+  // synchronously in the host, and only leave the state when the host
+  // calls `machine.txComplete()` after `TransmitHandle.done` resolves.
+  // Previously we auto-transitioned after a fixed 1 s tick, which painted
+  // "TRANSMISSION COMPLETE" long before the modem actually fell silent
+  // (~30 s for a maxed-out message).
+  | { kind: "C_TX_BUSY"; slot: SlotId; mode: "AUDIO" | "DIGITAL" }
   | { kind: "C_TX_COMPLETE"; slot: SlotId; mode: "AUDIO" | "DIGITAL" }
   // `active` flips true as soon as the host demodulator detects carrier /
   // receives its first byte, so the LCD can show "Receiving Message" while
@@ -461,13 +466,8 @@ export class Machine {
       return [];
     }
     if (s.kind === "C_TX_BUSY") {
-      const rem = s.remainingMs - elapsedMs;
-      if (rem <= 0) {
-        const wire = this.deps.buffers.get(s.slot).buffer.toString();
-        this._state = { kind: "C_TX_COMPLETE", slot: s.slot, mode: s.mode };
-        return [{ kind: "txTransmitted", slot: s.slot, mode: s.mode, wire }];
-      }
-      this._state = { kind: "C_TX_BUSY", slot: s.slot, mode: s.mode, remainingMs: rem };
+      // No timer — the state is held until `txComplete()` is called by the
+      // host after the modem actually finishes. Ticks are no-ops here.
       return [];
     }
     if (s.kind === "C_TX_PLEASE_WAIT") {
@@ -1390,12 +1390,12 @@ export class Machine {
         return [];
       }
       if (event.kind === "key" && event.key === "ENTER") {
-        this._state = {
-          kind: "C_TX_BUSY",
-          slot: s.slot,
-          mode: s.mode,
-          remainingMs: TX_BUSY_MS,
-        };
+        const wire = this.deps.buffers.get(s.slot).buffer.toString();
+        this._state = { kind: "C_TX_BUSY", slot: s.slot, mode: s.mode };
+        // Fire the TX effect immediately so the host starts the modem
+        // audio as soon as the "TRANSMITTING MESSAGE" screen appears. The
+        // state is then held open until `txComplete()` is called.
+        return [{ kind: "txTransmitted", slot: s.slot, mode: s.mode, wire }];
       }
       return [];
     }
@@ -1407,14 +1407,10 @@ export class Machine {
     }
     if (s.kind === "C_TX_COMPLETE") {
       if (event.kind === "key" && event.key === "ENTER") {
-        // Retransmit.
-        this._state = {
-          kind: "C_TX_BUSY",
-          slot: s.slot,
-          mode: s.mode,
-          remainingMs: TX_BUSY_MS,
-        };
-        return [];
+        // Retransmit — emit txTransmitted again so the host restarts audio.
+        const wire = this.deps.buffers.get(s.slot).buffer.toString();
+        this._state = { kind: "C_TX_BUSY", slot: s.slot, mode: s.mode };
+        return [{ kind: "txTransmitted", slot: s.slot, mode: s.mode, wire }];
       }
       if (event.kind === "key" && event.key === "XIT") {
         this._state = { kind: "MAIN_MENU", topIndex: 0 };
@@ -1759,6 +1755,21 @@ export class Machine {
     if (this._state.kind !== "C_RX_WAIT") return;
     if (this._state.active) return;
     this._state = { ...this._state, active: true };
+  }
+
+  /**
+   * Signal from the host that the modem has finished playing the
+   * transmitted message (carrier dropped). Transitions C_TX_BUSY →
+   * C_TX_COMPLETE so the LCD swaps from "TRANSMITTING MESSAGE" to
+   * "TRANSMISSION COMPLETE" in sync with the audio actually stopping.
+   *
+   * No-op outside C_TX_BUSY — if the operator pressed XIT and the machine
+   * already left the state, the host's deferred `handle.done` callback can
+   * still fire and we silently ignore it.
+   */
+  txComplete(): void {
+    if (this._state.kind !== "C_TX_BUSY") return;
+    this._state = { kind: "C_TX_COMPLETE", slot: this._state.slot, mode: this._state.mode };
   }
 
   feedReceived(text: string, slot?: SlotId): void {

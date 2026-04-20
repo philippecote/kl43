@@ -8,7 +8,6 @@ import {
   POWER_ON_CONFIRM_TIMEOUT_MS,
   PRINT_BUSY_MS,
   RX_BUSY_MS,
-  TX_BUSY_MS,
   UPDATE_COMPLETE_MS,
   VIEW_ANGLE_MAX,
   defaultDeps,
@@ -1344,17 +1343,33 @@ describe("Communications (MANUAL p.22-40)", () => {
     expect(b.m.state).toEqual({ kind: "C_TX_SLOT_SELECT", mode: "AUDIO" });
     b.m.press({ kind: "char", ch: "A" });
     expect(b.m.state).toEqual({ kind: "C_TX_READY", slot: "A", mode: "AUDIO" });
-    b.m.press({ kind: "key", key: "ENTER" });
-    expect(b.m.state.kind).toBe("C_TX_BUSY");
-    const effects = b.m.press({ kind: "tick", elapsedMs: TX_BUSY_MS });
+    // Pressing ENTER fires the TX effect immediately — the host starts the
+    // modem audio as soon as "TRANSMITTING MESSAGE" is on screen.
+    const effects = b.m.press({ kind: "key", key: "ENTER" });
     expect(effects).toContainEqual({
       kind: "txTransmitted",
       slot: "A",
       mode: "AUDIO",
       wire: "ABCDEFGHIJKL ZZZ ZZZ",
     });
+    expect(b.m.state).toEqual({ kind: "C_TX_BUSY", slot: "A", mode: "AUDIO" });
+    // Ticks don't auto-complete — the machine waits for txComplete().
+    b.m.press({ kind: "tick", elapsedMs: 30_000 });
+    expect(b.m.state.kind).toBe("C_TX_BUSY");
+    // Host signals audio done → state flips to TRANSMISSION COMPLETE.
+    b.m.txComplete();
     expect(b.m.state).toEqual({ kind: "C_TX_COMPLETE", slot: "A", mode: "AUDIO" });
     b.m.press({ kind: "key", key: "XIT" });
+    expect(b.m.state.kind).toBe("MAIN_MENU");
+  });
+
+  it("txComplete() is a no-op outside C_TX_BUSY", () => {
+    // If the operator pressed XIT during transmit, the machine has already
+    // left C_TX_BUSY by the time the host's deferred handle.done callback
+    // fires. txComplete() must silently ignore that stale signal.
+    const b = build();
+    toMenu(b.m);
+    b.m.txComplete();
     expect(b.m.state.kind).toBe("MAIN_MENU");
   });
 
@@ -1678,10 +1693,14 @@ describe("Communications (MANUAL p.22-40)", () => {
     b.m.press({ kind: "char", ch: "T" });
     b.m.press({ kind: "char", ch: "C" }); // connector-audio skips the lines prompt
     b.m.press({ kind: "char", ch: "A" });
-    b.m.press({ kind: "key", key: "ENTER" });
-    b.m.press({ kind: "tick", elapsedMs: TX_BUSY_MS });
+    const first = b.m.press({ kind: "key", key: "ENTER" });
+    expect(first.some((e) => e.kind === "txTransmitted")).toBe(true);
+    b.m.txComplete();
     expect(b.m.state.kind).toBe("C_TX_COMPLETE");
-    b.m.press({ kind: "key", key: "ENTER" });
+    // Re-pressing ENTER on C_TX_COMPLETE retransmits: new txTransmitted
+    // effect fires and we're back in C_TX_BUSY.
+    const second = b.m.press({ kind: "key", key: "ENTER" });
+    expect(second.some((e) => e.kind === "txTransmitted")).toBe(true);
     expect(b.m.state.kind).toBe("C_TX_BUSY");
   });
 });
