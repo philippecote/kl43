@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import {
   BASE32_ALPHABET,
+  BASE32_ERASURE_MARKER,
   Base32Error,
   base32Decode,
   base32Encode,
   filterToBase32,
+  filterToBase32PreservingErasures,
   groupForDisplay,
 } from "./Base32.js";
 
@@ -101,5 +103,80 @@ describe("filterToBase32 (editor input filter)", () => {
 
   it("uppercases lowercase input", () => {
     expect(filterToBase32("abc234")).toBe("ABC234");
+  });
+
+  it("drops the '?' erasure marker (editor contract)", () => {
+    // The editor's silent-drop filter must not leak modem-emitted '?'
+    // markers into an operator's hand-typed ciphertext entry.
+    expect(filterToBase32("AB?CD")).toBe("ABCD");
+  });
+});
+
+describe("filterToBase32PreservingErasures (receive-side filter)", () => {
+  it("is literally the erasure marker", () => {
+    expect(BASE32_ERASURE_MARKER).toBe("?");
+  });
+
+  it("maps '?' to 'A' at the same position (single)", () => {
+    expect(filterToBase32PreservingErasures("AB?DE")).toBe("ABADE");
+  });
+
+  it("preserves length with repeated '?' in the body", () => {
+    const input = "A?B?C?";
+    const out = filterToBase32PreservingErasures(input);
+    expect(out.length).toBe(input.length);
+    expect(out).toBe("AABACA");
+  });
+
+  it("still drops non-base32, non-'?' characters (spaces, punctuation)", () => {
+    // Spaces — which the transmitter puts between 3-char groups — are
+    // dropped as before; only '?' gets the position-preserving mapping.
+    expect(filterToBase32PreservingErasures("ABC ?EF")).toBe("ABCAEF");
+    expect(filterToBase32PreservingErasures("Hello, ?world!")).toBe("HELLOAWORLD");
+  });
+
+  it("uppercases and strips disallowed like filterToBase32", () => {
+    expect(filterToBase32PreservingErasures("abc234")).toBe("ABC234");
+    // '1' and '0' are base32-banned; still dropped.
+    expect(filterToBase32PreservingErasures("A1B0C")).toBe("ABC");
+  });
+
+  it("handles all-'?' input as all 'A's (all-zero-bit worst case)", () => {
+    expect(filterToBase32PreservingErasures("????")).toBe("AAAA");
+  });
+
+  it("degenerates to filterToBase32 when no '?' is present", () => {
+    fc.assert(
+      fc.property(
+        fc.string({ maxLength: 64 }).filter((s) => !s.includes("?")),
+        (s) => {
+          expect(filterToBase32PreservingErasures(s)).toBe(filterToBase32(s));
+        },
+      ),
+    );
+  });
+
+  it("each '?' shifts at most one output symbol away from the strict filter", () => {
+    // Invariant that makes the RS argument work: inserting a '?' into
+    // an otherwise valid base32 sequence should only flip one symbol
+    // (the 'A' standing in for the lost byte), not shift the remaining
+    // symbols. Compare output to the strict filter on the same input
+    // with the '?' stripped.
+    fc.assert(
+      fc.property(
+        fc
+          .stringMatching(/^[A-Z2-7]*$/)
+          .filter((s) => s.length >= 2)
+          .map((s) => ({ s, i: s.length > 0 ? s.length >>> 1 : 0 })),
+        ({ s, i }) => {
+          const withErasure = s.slice(0, i) + "?" + s.slice(i);
+          const out = filterToBase32PreservingErasures(withErasure);
+          expect(out.length).toBe(s.length + 1);
+          expect(out.slice(0, i)).toBe(s.slice(0, i));
+          expect(out[i]).toBe("A");
+          expect(out.slice(i + 1)).toBe(s.slice(i));
+        },
+      ),
+    );
   });
 });

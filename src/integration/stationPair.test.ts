@@ -186,3 +186,143 @@ describe("station pair — A encrypts, B decrypts", () => {
     expect(decryptMessage(bNow, b.backend, encrypted)).toBe("DAY 5");
   });
 });
+
+// The clock-locked receiver in [src/host/modem.ts](../host/modem.ts)
+// emits a literal '?' at every UART position where a byte was lost.
+// Downstream, filterToBase32PreservingErasures maps '?' to 'A' so the
+// codeword stays byte-aligned and Reed–Solomon sees a position-
+// preserving substitution (≤ 2 byte errors per erasure) instead of a
+// stream shift. These tests pin that contract.
+describe("station pair — '?' erasure markers from modem drops", () => {
+  const keyLetters = appendChecksum("ABCDEFGHIJKLMNOPABCDEFGHIJKLMN");
+
+  // formatForDisplay also groups the MI itself into 3-char chunks
+  // ("VIE EQS RTZ MRW"), so the body starts one position past the 12th
+  // MI letter — not at `indexOf(" ")`.
+  function bodyStart(wire: string): number {
+    let letters = 0;
+    let i = 0;
+    while (i < wire.length && letters < 12) {
+      if (/[A-Z]/.test(wire[i]!)) letters++;
+      i++;
+    }
+    while (i < wire.length && wire[i] === " ") i++;
+    if (i >= wire.length) throw new Error("wire has no body");
+    return i;
+  }
+
+  // Indices of the MI letters in the wire (positions 0..i of the 12
+  // A-Z header letters). Used by the MI-corruption test.
+  function miLetterPositions(wire: string): number[] {
+    const out: number[] = [];
+    for (let i = 0; i < wire.length && out.length < 12; i++) {
+      if (/[A-Z]/.test(wire[i]!)) out.push(i);
+    }
+    return out;
+  }
+
+  // Replace — don't insert — a single character with '?'. The modem
+  // drop scenario preserves the character count (one lost UART byte
+  // becomes one '?' at the same stream position), so our injection
+  // must preserve it too.
+  function replaceWithErasure(s: string, idx: number): string {
+    if (idx < 0 || idx >= s.length) throw new RangeError(`idx ${idx} out of range`);
+    return s.slice(0, idx) + "?" + s.slice(idx + 1);
+  }
+
+  // Pick indices inside the body that are actual base32 characters
+  // (skip the group-separator spaces, since replacing a space with '?'
+  // wouldn't model a UART byte drop — the transmitter DOES send spaces
+  // as real bytes, but they happen to fall through the base32 filter).
+  function bodyBase32Positions(wire: string): number[] {
+    const start = bodyStart(wire);
+    const out: number[] = [];
+    for (let i = start; i < wire.length; i++) {
+      const ch = wire[i]!;
+      if (/[A-Z2-7]/.test(ch)) out.push(i);
+    }
+    return out;
+  }
+
+  it("decrypts cleanly despite a single '?' erasure in the body", () => {
+    const a = makeStation(1, "A", keyLetters);
+    const b = makeStation(1, "B", keyLetters);
+    const plaintext = "HELLO, WORLD!";
+    const encrypted = encryptMessage(a.compartment, a.backend, plaintext, randomBytes);
+    const wire = formatForDisplay(encrypted);
+
+    const positions = bodyBase32Positions(wire);
+    expect(positions.length).toBeGreaterThan(20);
+    const corrupted = replaceWithErasure(wire, positions[Math.floor(positions.length / 2)]!);
+    expect(corrupted).toContain("?");
+    // No character-count drift — the modem drop scenario preserves length.
+    expect(corrupted.length).toBe(wire.length);
+
+    const received = parseDisplayForm(corrupted);
+    expect(decryptMessage(b.compartment, b.backend, received)).toBe(plaintext);
+  });
+
+  it("decrypts despite three '?' erasures scattered through the body", () => {
+    const a = makeStation(1, "A", keyLetters);
+    const b = makeStation(1, "B", keyLetters);
+    const plaintext = "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG";
+    const encrypted = encryptMessage(a.compartment, a.backend, plaintext, randomBytes);
+    const wire = formatForDisplay(encrypted);
+
+    const positions = bodyBase32Positions(wire);
+    // Three roughly-evenly-spaced drop positions.
+    const picks = [
+      positions[Math.floor(positions.length * 0.25)]!,
+      positions[Math.floor(positions.length * 0.5)]!,
+      positions[Math.floor(positions.length * 0.75)]!,
+    ];
+    let corrupted = wire;
+    for (const p of picks) corrupted = replaceWithErasure(corrupted, p);
+    expect((corrupted.match(/\?/g) ?? []).length).toBe(3);
+
+    const received = parseDisplayForm(corrupted);
+    expect(decryptMessage(b.compartment, b.backend, received)).toBe(plaintext);
+  });
+
+  it("decrypts under randomized erasure placement (property)", () => {
+    // A single '?' anywhere in the body is always within RS budget for
+    // the short-plaintext single-codeword case. Assert that across a
+    // range of randomized drop positions.
+    const a = makeStation(1, "A", keyLetters);
+    const b = makeStation(1, "B", keyLetters);
+    const plaintext = "HELLO, WORLD!";
+    const encrypted = encryptMessage(a.compartment, a.backend, plaintext, randomBytes);
+    const wire = formatForDisplay(encrypted);
+    const positions = bodyBase32Positions(wire);
+    fc.assert(
+      fc.property(fc.nat({ max: positions.length - 1 }), (i) => {
+        const corrupted = replaceWithErasure(wire, positions[i]!);
+        const received = parseDisplayForm(corrupted);
+        expect(decryptMessage(b.compartment, b.backend, received)).toBe(plaintext);
+      }),
+      { numRuns: 20 },
+    );
+  });
+
+  it("rejects a '?' planted inside the MI header", () => {
+    // The MI has no FEC (it's the ciphertext's IV, must be transmitted
+    // verbatim), so a modem drop inside the header is not recoverable.
+    // The parser's strict A-Z scan skips '?' and pulls the next base32
+    // body character into the MI slot; the resulting MI fails the
+    // appended checksum and we throw InvalidMiError — exactly the
+    // behaviour an operator would see for any MI-checksum mismatch.
+    const a = makeStation(1, "A", keyLetters);
+    const b = makeStation(1, "B", keyLetters);
+    const encrypted = encryptMessage(a.compartment, a.backend, "HELLO", randomBytes);
+    const wire = formatForDisplay(encrypted);
+    // Replace the 4th MI letter (well inside the header).
+    const miPositions = miLetterPositions(wire);
+    expect(miPositions.length).toBe(12);
+    const corrupted = replaceWithErasure(wire, miPositions[3]!);
+
+    expect(() => {
+      const received = parseDisplayForm(corrupted);
+      decryptMessage(b.compartment, b.backend, received);
+    }).toThrow(InvalidMiError);
+  });
+});

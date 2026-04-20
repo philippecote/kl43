@@ -452,7 +452,32 @@ Each transmission consists of:
 
 The real KL-43 has built-in FEC but the code is not documented. RS(255,223) is the NASA/CCSDS-standard code of the era and is a reasonable period-authentic choice.
 
-### 7.4 RS-232 interface (optional, stub only)
+RS(255,223) corrects **substitutions** at unknown positions: a single dropped or inserted byte would otherwise shift every byte after it by one column and wildly exceed the 16-error budget. The UART receiver (§7.4) is therefore designed to convert every channel disturbance into a position-preserving substitution before FEC ever sees it — see that section for how dropped bytes are turned into `?` erasures and fed back into RS as zero-valued symbols.
+
+### 7.4 UART receiver clock-lock and erasure handling
+
+The receiver's UART is a three-state machine: **IDLE → DATA → LOCKED → DATA → …**. On the first byte of a transmission it acquires the start-bit edge coarsely in IDLE. After sampling the 10 bits of an 8-N-1 frame it enters LOCKED, holding a bit-clock locked to that byte's start-bit sample index. From LOCKED it predicts the *next* byte's start bit at exactly `lastStartEdge + 10 × spb` (sample-per-bit) and accepts an edge only inside a narrow acceptance window around that prediction.
+
+Two outcomes are possible at the stop-bit sample of each byte:
+
+| Stop bit | Action | Next LOCKED mode |
+|---|---|---|
+| Mark (clean) | Emit `(byte, erased=false)` | Edge-based resync — hunt for the mark→space transition of the next byte inside `[expectedEdge − 0.5×spb, expectedEdge + 3×spb]`, walk back narrow to pin the exact edge, absorb small clock jitter |
+| Space (framing error) | Emit `(0x3F, erased=true)` — ASCII `?` | Clock-only resync — the line is continuously space through the erased stop bit and into the next start bit, so no mark→space edge exists at `expectedEdge`; the receiver trusts the bit clock and re-enters DATA at `expectedEdge + 0.5×spb` |
+
+This matters because the Bell 103 channel's dominant failure mode — the one that used to produce "uncorrectable errors" reports downstream — is a single-byte drop on a noisy channel. Before the clock lock was added, a framing error silently dropped the byte and returned the UART to IDLE, where the coarse start-bit scanner often latched onto an internal data-bit transition of the *next* byte and emitted a phantom shifted byte. Either way the byte stream shifted by one and every subsequent codeword landed at the wrong offset — catastrophic for Reed-Solomon.
+
+With clock-lock:
+
+1. The receiver emits **exactly N callbacks for N transmitted UART frames**, even when some frames have framing errors.
+2. Each lost byte surfaces as an erasure at its correct byte position, visible to the operator as a literal `?` in the Review section.
+3. Noise-triggered false transitions *between* bytes cannot produce phantom insertions, because LOCKED only accepts edges inside the acceptance window around `expectedEdge`.
+
+The downstream base32 decode path (`filterToBase32PreservingErasures` in [src/wire/Base32.ts](../src/wire/Base32.ts)) substitutes each `?` with `'A'` — the zero-bit base32 symbol — so codeword byte alignment is preserved for RS, which then treats the erasure as one of its ≤ 16 substitution errors per 255-byte codeword.
+
+A `?` planted in the **MI header** (first 12 A-Z characters) is not recoverable: MI parsing is strict A-Z and the skipped position pulls in the next body character, corrupting the MI checksum and raising `InvalidMiError` at decrypt time. Erasures inside the MI are vanishingly rare on a real Bell 103 channel, but the contract is explicit: **erasures recover body corruption, not header corruption**.
+
+### 7.5 RS-232 interface (optional, stub only)
 
 For completeness and possible extension:
 

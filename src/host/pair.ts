@@ -290,9 +290,16 @@ function startListening(s: Station): void {
   try {
     const rx = startReceiverFromNode(s.rxInput, s.rxPair);
     s.receiver = rx;
-    rx.onByte((b) => {
-      if (b >= 0x20 && b < 0x7f) s.rxBuffer += String.fromCharCode(b);
-      else if (b === 0x0a || b === 0x0d) s.rxBuffer += "\n";
+    rx.onByte((b, erased) => {
+      if (erased) {
+        // Clock-lock emitted an erasure marker for a lost byte — surface
+        // it as a literal '?' so the operator sees the dropout location.
+        s.rxBuffer += "?";
+      } else if (b >= 0x20 && b < 0x7f) {
+        s.rxBuffer += String.fromCharCode(b);
+      } else if (b === 0x0a || b === 0x0d) {
+        s.rxBuffer += "\n";
+      }
       s.machine.rxCarrierDetected();
       s.render();
       if (s.rxSilenceTimer) clearTimeout(s.rxSilenceTimer);

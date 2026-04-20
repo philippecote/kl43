@@ -171,7 +171,19 @@ export function transmitTextTo(
 
 export type ReceiverHandle = {
   stop(): void;
-  onByte: (cb: (b: number) => void) => void;
+  /**
+   * Register a callback for each decoded byte. The second argument is
+   * `erased`: true means the receiver's bit-clock expected a byte at this
+   * position on the stream but the UART framing failed (no valid stop
+   * bit) OR no start-bit edge arrived within the clock-lock tolerance
+   * window. The byte value is ASCII `?` (0x3F) in that case, chosen so
+   * the operator sees a literal `?` in Review at the exact position of
+   * the lost byte. Downstream (Base32 receive-side filter) converts the
+   * `?` to a zero-bit base32 symbol so the codeword alignment is
+   * preserved for Reed–Solomon — an erasure is a single position-known
+   * substitution, which RS handles within its per-codeword budget.
+   */
+  onByte: (cb: (b: number, erased: boolean) => void) => void;
 };
 
 // URL flag ?debug=modem dumps per-detection stats (throttled) so we can see
@@ -219,6 +231,37 @@ export function startReceiverFromNode(
   return attachReceiver(ctx, source, pair, () => {});
 }
 
+/**
+ * Pure UART/FSK demodulator: same logic as the live receiver, but no
+ * AudioContext, no ScriptProcessorNode, no mic. Given a sample rate and
+ * the Bell 103 tone pair, accepts blocks of Float32 audio samples and
+ * emits `(byte, erased)` callbacks as each UART frame is decoded. Used
+ * by [src/host/modem.test.ts](src/host/modem.test.ts) to exercise the
+ * clock-locked state machine against synthesized FSK with deliberately
+ * injected drops and inserts.
+ *
+ * The object exposes a minimal surface — `pushSamples()` + `onByte()` —
+ * and is stateful: it buffers samples internally (via the Goertzel ring
+ * buffer) and holds the UART state across calls. Push as many or as few
+ * samples as you want per call; the decoder doesn't care about buffer
+ * boundaries.
+ */
+export type UartDemodulator = {
+  pushSamples(samples: Float32Array | ArrayLike<number>): void;
+  onByte(cb: (b: number, erased: boolean) => void): void;
+};
+
+export function createUartDemodulator(
+  sampleRate: number,
+  pair: FreqPair,
+): UartDemodulator {
+  const { pushSamples, setOnByte } = buildDemodCore(sampleRate, pair);
+  return {
+    pushSamples,
+    onByte: setOnByte,
+  };
+}
+
 function attachReceiver(
   ctx: AudioContext,
   src: AudioNode,
@@ -234,7 +277,41 @@ function attachReceiver(
   const mute = ctx.createGain();
   mute.gain.value = 0;
 
-  const sr = ctx.sampleRate;
+  const core = buildDemodCore(ctx.sampleRate, pair);
+
+  proc.onaudioprocess = (e: AudioProcessingEvent) => {
+    core.pushSamples(e.inputBuffer.getChannelData(0));
+  };
+
+  src.connect(proc).connect(mute).connect(ctx.destination);
+
+  return {
+    stop: () => {
+      try {
+        src.disconnect();
+        proc.disconnect();
+        mute.disconnect();
+      } catch { /* ignore */ }
+      onStop();
+    },
+    onByte: (cb) => core.setOnByte(cb),
+  };
+}
+
+/**
+ * Shared body of the demodulator used by both the live AudioContext
+ * path (`attachReceiver`) and the headless test path
+ * (`createUartDemodulator`). Returns closures bound to a single
+ * receiver's state; callers decide how to feed samples in.
+ */
+function buildDemodCore(
+  sampleRate: number,
+  pair: FreqPair,
+): {
+  pushSamples(input: Float32Array | ArrayLike<number>): void;
+  setOnByte(cb: (b: number, erased: boolean) => void): void;
+} {
+  const sr = sampleRate;
   const spb = sr / BAUD;
   // Full bit-period window = ~3.5 cycles of the 1070 Hz tone at 48 kHz,
   // which is enough for the Goertzel to discriminate mark vs. space cleanly.
@@ -325,15 +402,76 @@ function attachReceiver(
     return compute(pair.mark) > compute(pair.space) ? 1 : 0;
   };
 
-  type State = "IDLE" | "DATA";
+  // The receiver is a three-state machine:
+  //   IDLE   — no lock. Coarse-scanning for the first mark→space edge.
+  //   DATA   — locked to a byte; sampling the 10 bits of an 8-N-1 frame.
+  //   LOCKED — between bytes, bit-clock locked to lastStartEdge. Waiting
+  //            for the NEXT byte's start-bit edge at the predicted sample
+  //            position expectedEdge = lastStartEdge + 10*spb.
+  //
+  // LOCKED is what makes the receiver robust to single-byte drops and
+  // noise-triggered phantom insertions. Before the clock lock was added,
+  // a UART framing error (stop bit not mark) silently dropped the byte
+  // and returned to IDLE, where the coarse scanner would often latch onto
+  // an internal data-bit transition of the NEXT byte and emit a phantom
+  // shifted byte. Either way, the byte stream shifted by one and every
+  // subsequent byte landed at the wrong offset — catastrophic for
+  // Reed–Solomon, which corrects substitutions but not insertions or
+  // deletions. Now:
+  //   - framing error → emit erasure byte (ASCII '?', 0x3F) at the
+  //     correct position, enter LOCKED aligned with the transmitter's
+  //     byte clock, accept the next byte at its predicted edge;
+  //   - noise-triggered false transitions between bytes are simply
+  //     ignored because LOCKED only accepts edges inside a narrow window
+  //     around expectedEdge.
+  // The downstream base32 decode path (filterToBase32PreservingErasures)
+  // substitutes '?' with the zero-bit base32 symbol so codeword byte
+  // alignment is preserved for RS.
+  type State = "IDLE" | "DATA" | "LOCKED";
   let state: State = "IDLE";
   let bitIdx = 0;
   let byteAccum = 0;
   let nextTarget = 0; // sample index at which to sample next bit
   let lastIdle: 0 | 1 = 1;
+  // Sample index of the current (or most recent) byte's start-bit edge,
+  // i.e. the sample where the line fell from mark to space. Used in
+  // LOCKED to predict the next byte's edge.
+  let lastStartEdge = 0;
+  // Predicted sample index of the next byte's start-bit edge.
+  let expectedEdge = 0;
+  // Previous sample's bit value in LOCKED, for transition detection.
+  let lockedLastBit: 0 | 1 = 1;
+  // Whether LOCKED should re-sync by hunting for the mark→space
+  // transition of the next byte's start bit, or by trusting the bit
+  // clock directly. Set to `true` after a clean byte (stop bit = mark,
+  // so line is mark between bytes → a real edge appears at the next
+  // start bit), and `false` after a framing-error erasure (stop bit =
+  // space, so line is continuously space through the erased stop bit
+  // and into the next start bit → no mark→space edge exists at
+  // expectedEdge; walk-back would latch on the wrong transition and
+  // misalign the whole next byte). In clock-only mode we bypass edge
+  // detection and simply re-enter DATA with nextTarget aligned to
+  // expectedEdge + 0.5*spb.
+  let lockedNeedsEdge = true;
   const scanStep = Math.max(1, Math.round(spb / 16));
 
-  let onByteCb: (b: number) => void = () => {};
+  // Acceptance window around expectedEdge in LOCKED. EARLY covers small
+  // transmitter/receiver clock jitter; LATE covers the detection lag from
+  // the Goertzel window needing ~half a bit of space-phase samples before
+  // it reports "we're in space". If no edge appears by expectedEdge +
+  // LATE_TOLERANCE, we relinquish the clock lock — either the stream
+  // ended (normal EOM) or the line degraded beyond resync; the
+  // rxSilenceTimer upstream still flushes the buffer.
+  const EARLY_TOLERANCE_SAMPLES = Math.round(spb * 0.5);
+  const LATE_TOLERANCE_SAMPLES = Math.round(spb * 3);
+  // detectAt's Goertzel window is spb samples wide, so it doesn't
+  // reliably show "space" until the window is mostly past the edge
+  // (centerIdx ≈ edge + halfWin). The walk-back in LOCKED therefore has
+  // to cover a potentially longer span than the IDLE one — up to
+  // halfWin + one scanStep + narrowHalf to be safe.
+  const LOCKED_WALKBACK = halfWin + scanStep + narrowHalf;
+
+  let onByteCb: (b: number, erased: boolean) => void = () => {};
 
   // Periodic, unconditional debug dump (~500 ms cadence) plus per-callback
   // mic-arrival proof. Lets us tell at a glance whether we're getting any
@@ -368,8 +506,7 @@ function attachReceiver(
     cbPeak = 0;
   };
 
-  proc.onaudioprocess = (e: AudioProcessingEvent) => {
-    const input = e.inputBuffer.getChannelData(0);
+  const pushSamples = (input: Float32Array | ArrayLike<number>): void => {
     cbCount++;
     for (let i = 0; i < input.length; i++) {
       const s = input[i]!;
@@ -409,14 +546,14 @@ function attachReceiver(
               break;
             }
           }
-          const midStart = Math.round(edge + spb / 2);
-          nextTarget = midStart;
+          lastStartEdge = edge;
+          nextTarget = Math.round(edge + spb / 2);
           state = "DATA";
           bitIdx = -1;
           byteAccum = 0;
         }
         lastIdle = d.bit;
-      } else {
+      } else if (state === "DATA") {
         if (centerIdx < nextTarget) continue;
         // Inside a frame we trust whichever bin is louder. Only a total
         // carrier collapse (energy below the absolute floor) aborts —
@@ -436,6 +573,8 @@ function attachReceiver(
           const big = em > es ? em : es;
           const small = em > es ? es : em;
           if (bit !== 0 || big <= small * modemConfig.binRatio) {
+            // Noise-glitch start bit — no real byte to preserve, so just
+            // fall back to full IDLE acquisition.
             state = "IDLE";
             lastIdle = bit;
             continue;
@@ -447,25 +586,119 @@ function attachReceiver(
           bitIdx++;
           nextTarget += Math.round(spb);
         } else {
-          if (bit === 1) onByteCb(byteAccum);
-          state = "IDLE";
-          lastIdle = bit;
+          // Stop-bit sample. Clean byte if mark, otherwise it's a framing
+          // error — emit an erasure at the SAME position so downstream
+          // RS still sees a position-preserving substitution rather than
+          // a dropped byte that would shift every subsequent codeword.
+          if (bit === 1) {
+            onByteCb(byteAccum, false);
+            // Clean stop bit: the line is mark between this byte and
+            // the next start bit, so the next byte's start bit will
+            // produce a real mark→space edge. LOCKED uses edge-based
+            // resync (with walk-back) to absorb small clock jitter.
+            lockedNeedsEdge = true;
+          } else {
+            onByteCb(0x3f, true); // ASCII '?'
+            // Framing error: stop bit was space. On the wire the line
+            // is continuously space from the end of the real data
+            // through this "stop" bit and into the next byte's start
+            // bit (both space). There is no mark→space transition at
+            // expectedEdge, so LOCKED must NOT walk back — it would
+            // latch onto the earlier (inside-this-byte) transition or
+            // drift late and misalign the next byte. Clock-only mode
+            // re-enters DATA with nextTarget aligned to
+            // expectedEdge + 0.5*spb.
+            lockedNeedsEdge = false;
+          }
+          // Either way, the transmitter's bit clock is still running and
+          // the next byte's start-bit edge is exactly 10 bit-periods
+          // after THIS byte's start edge. Hand over to LOCKED to wait
+          // for it at that predicted sample position.
+          expectedEdge = lastStartEdge + Math.round(10 * spb);
+          lockedLastBit = 1;
+          state = "LOCKED";
         }
+      } else {
+        // LOCKED: bit-clock is locked to lastStartEdge. Two resync
+        // modes depending on the previous byte's stop bit:
+        //   * edge-based (lockedNeedsEdge=true, set after a clean
+        //     stop=mark byte): hunt for the mark→space transition of
+        //     the next byte inside
+        //     [expectedEdge - EARLY_TOLERANCE, expectedEdge + LATE_TOLERANCE].
+        //   * clock-only (lockedNeedsEdge=false, set after a
+        //     framing-error erasure): no edge exists — the line is
+        //     space on both sides of expectedEdge — so trust the clock
+        //     and re-enter DATA targeting expectedEdge + 0.5*spb.
+        if (head % scanStep !== 0) continue;
+        const energy = windowEnergy(centerIdx);
+        if (energy < absFloor()) {
+          // Carrier gone. End of message or line dropped — relinquish
+          // the clock lock and go back to passive scanning.
+          state = "IDLE";
+          lastIdle = 1;
+          continue;
+        }
+        if (centerIdx > expectedEdge + LATE_TOLERANCE_SAMPLES) {
+          // No start-bit edge arrived within tolerance. In practice this
+          // is the transmitter's post-data mark (carrier still on, just
+          // no more data bits) — treat as EOM. The rxSilenceTimer in the
+          // host finishes the job of flushing the buffer.
+          state = "IDLE";
+          lastIdle = 1;
+          continue;
+        }
+        if (!lockedNeedsEdge) {
+          // Clock-only resync after a framing-error erasure. Wait until
+          // the Goertzel window can be centred on the middle of the
+          // next start bit, then re-enter DATA with lastStartEdge =
+          // expectedEdge. We skip start-bit validation in DATA (bitIdx
+          // starts at 0 instead of -1) so a space→space transition
+          // through the gap can't be mistaken for a missing start bit.
+          const startSampleCtr = expectedEdge + Math.round(spb / 2);
+          if (centerIdx < startSampleCtr) continue;
+          lastStartEdge = expectedEdge;
+          nextTarget = startSampleCtr + Math.round(spb);
+          state = "DATA";
+          bitIdx = 0;
+          byteAccum = 0;
+          continue;
+        }
+        if (centerIdx < expectedEdge - EARLY_TOLERANCE_SAMPLES) {
+          // Still inside the previous byte's stop bit — wait.
+          lockedLastBit = 1;
+          continue;
+        }
+        const d = detectAt(centerIdx);
+        if (!d.ok) continue; // ambiguous; try again at next scan step
+        if (d.bit === 0 && lockedLastBit === 1) {
+          // Mark→space transition inside the acceptance window. Walk
+          // back narrow to pin down the exact edge — same technique as
+          // IDLE, but with a longer reach to cover detectAt's ~halfWin
+          // detection lag.
+          let edge = centerIdx;
+          for (let k = 1; k <= LOCKED_WALKBACK; k++) {
+            const probe = centerIdx - k;
+            if (probe - narrowHalf < 0) break;
+            if (detectNarrow(probe) === 1) {
+              edge = probe + 1;
+              break;
+            }
+          }
+          lastStartEdge = edge;
+          nextTarget = Math.round(edge + spb / 2);
+          state = "DATA";
+          bitIdx = -1;
+          byteAccum = 0;
+          continue;
+        }
+        lockedLastBit = d.bit;
       }
     }
   };
 
-  src.connect(proc).connect(mute).connect(ctx.destination);
-
-  return {
-    stop: () => {
-      try {
-        src.disconnect();
-        proc.disconnect();
-        mute.disconnect();
-      } catch { /* ignore */ }
-      onStop();
-    },
-    onByte: (cb) => { onByteCb = cb; },
+  const setOnByte = (cb: (b: number, erased: boolean) => void) => {
+    onByteCb = cb;
   };
+
+  return { pushSamples, setOnByte };
 }

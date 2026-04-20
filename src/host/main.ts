@@ -118,11 +118,22 @@ async function startListeningForRx(): Promise<void> {
   try {
     receiver = await startReceiver(BELL103_ORIGINATE);
     console.log("[kl43] RX: listening on originate pair (1270/1070 Hz)");
-    receiver.onByte((b) => {
+    receiver.onByte((b, erased) => {
       const ch = b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : `\\x${b.toString(16)}`;
-      console.log(`[kl43] RX byte: 0x${b.toString(16).padStart(2, "0")} (${ch})`);
-      if (b >= 0x20 && b < 0x7f) rxBuffer += String.fromCharCode(b);
-      else if (b === 0x0a || b === 0x0d) rxBuffer += "\n";
+      console.log(
+        `[kl43] RX byte: 0x${b.toString(16).padStart(2, "0")} (${ch})${erased ? " [ERASURE]" : ""}`,
+      );
+      if (erased) {
+        // Clock-lock detected a lost byte at this position. Append the
+        // literal '?' marker so the operator can see where the channel
+        // hiccupped; the base32 receive-side filter converts it to a
+        // zero-bit symbol so RS still sees byte-aligned substitutions.
+        rxBuffer += "?";
+      } else if (b >= 0x20 && b < 0x7f) {
+        rxBuffer += String.fromCharCode(b);
+      } else if (b === 0x0a || b === 0x0d) {
+        rxBuffer += "\n";
+      }
       // Flip the LCD from "Waiting for Carrier…" to "Receiving Message" on
       // the very first demodulated byte, instead of only after end-of-
       // carrier. rxCarrierDetected() is idempotent and safe to call per byte.

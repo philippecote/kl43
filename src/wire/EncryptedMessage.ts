@@ -29,7 +29,7 @@ import { Compartment } from "../state/KeyCompartment.js";
 import { CryptoBackend } from "../crypto/CryptoBackend.js";
 import { MI_TOTAL_LENGTH, makeMi, parseMi } from "../crypto/Mi.js";
 import { base32Encode, groupForDisplay } from "./Base32.js";
-import { filterToBase32 } from "./Base32.js";
+import { filterToBase32PreservingErasures } from "./Base32.js";
 import { frameOutgoing, unframeIncoming, WireFrameError } from "./WireFrame.js";
 import { ReedSolomonError } from "../fec/ReedSolomon.js";
 
@@ -134,10 +134,20 @@ export function formatForDisplay(message: EncryptedMessage): string {
  * Parse a display-form string back to an EncryptedMessage. Silently
  * filters out characters outside the allowed alphabets (matching the
  * editor's cipher-text-entry mode behavior).
+ *
+ * Receive-path erasure handling: '?' characters anywhere in the body
+ * are treated as position-preserving erasure markers (emitted by the
+ * modem when its bit-clock detected a lost byte) and mapped to 'A' (5
+ * zero bits) via `filterToBase32PreservingErasures`. The MI header,
+ * however, is extracted with the strict A-Z scan — a '?' inside the
+ * first 12 characters will push body characters into the header slot,
+ * fail the MI checksum, and surface as a normal "does not decrypt"
+ * error. That's the intended outcome: a drop in the 12-byte header
+ * cannot be recovered without a retransmit.
  */
 export function parseDisplayForm(text: string): EncryptedMessage {
   // First extract the MI body: take the first 12 A-Z characters, ignoring
-  // spaces and anything else (digits aren't valid in the MI).
+  // spaces and anything else (digits and '?' aren't valid in the MI).
   let mi = "";
   let i = 0;
   while (i < text.length && mi.length < MI_TOTAL_LENGTH) {
@@ -148,7 +158,8 @@ export function parseDisplayForm(text: string): EncryptedMessage {
   if (mi.length !== MI_TOTAL_LENGTH) {
     throw new Error(`expected ${MI_TOTAL_LENGTH}-letter MI header, found ${mi.length}`);
   }
-  // Remainder is ciphertext body; filter to base32 alphabet.
-  const cipherBase32 = filterToBase32(text.slice(i));
+  // Remainder is ciphertext body; keep erasure markers so Reed–Solomon
+  // sees byte-aligned substitutions instead of a shifted stream.
+  const cipherBase32 = filterToBase32PreservingErasures(text.slice(i));
   return { mi, cipherBase32 };
 }

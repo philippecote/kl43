@@ -39,7 +39,12 @@
 //     return.
 
 import { ReedSolomon, type RsParams, DEFAULT_K, DEFAULT_N } from "../fec/ReedSolomon.js";
-import { base32Decode, base32Encode, filterToBase32, groupForDisplay } from "./Base32.js";
+import {
+  base32Decode,
+  base32Encode,
+  filterToBase32PreservingErasures,
+  groupForDisplay,
+} from "./Base32.js";
 import { MI_TOTAL_LENGTH, parseMi } from "../crypto/Mi.js";
 
 export const LENGTH_PREFIX_BYTES = 2;
@@ -201,6 +206,12 @@ export function formatWireFrameForDisplay(frame: WireFrame): string {
  *
  * The first MI_TOTAL_LENGTH A-Z characters form the MI; everything after,
  * filtered to base32, is the body.
+ *
+ * Modem erasures ('?' in the body, emitted by the clock-locked receiver
+ * at positions where a UART byte was dropped) are mapped to base32 'A'
+ * (zero bits) so RS still sees byte-aligned data. A '?' anywhere in the
+ * first 12 characters is rejected by the strict MI scan — the MI has no
+ * FEC, so a header erasure is not recoverable.
  */
 export function parseWireFrameFromDisplay(text: string): WireFrame {
   let mi = "";
@@ -215,7 +226,7 @@ export function parseWireFrameFromDisplay(text: string): WireFrame {
       `expected ${MI_TOTAL_LENGTH}-letter MI header, found ${mi.length}`,
     );
   }
-  const body = filterToBase32(text.slice(i));
+  const body = filterToBase32PreservingErasures(text.slice(i));
   return { mi, body };
 }
 

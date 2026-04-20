@@ -92,3 +92,42 @@ export function filterToBase32(input: string): string {
   }
   return out;
 }
+
+/**
+ * Marker character used by the receiver to flag a byte the modem could
+ * not decode (UART framing error or missed clock-lock edge). See
+ * [src/host/modem.ts](src/host/modem.ts) LOCKED state. The receive-side
+ * base32 filter maps this marker to 'A' (= 5 zero bits) so codeword
+ * alignment is preserved for Reed–Solomon — the erasure shows up as a
+ * small, bounded substitution rather than a stream shift.
+ */
+export const BASE32_ERASURE_MARKER = "?";
+
+/**
+ * Receive-side filter: keep A-Z + 2-7, map the erasure marker to 'A'
+ * (base32 symbol for 0b00000), drop everything else.
+ *
+ * Position preservation is the whole point. `filterToBase32` (used by
+ * the interactive cipher-text editor) silently drops unknown characters,
+ * which on the wire would turn a single lost byte into a 5-bit shift
+ * for every subsequent base32 symbol in the codeword — Reed–Solomon
+ * doesn't recover from shifts. By mapping '?' to 'A' here, one lost UART
+ * byte corrupts at most two adjacent codeword bytes (5 bits lands on a
+ * byte boundary, so it disturbs the byte it overlaps plus possibly the
+ * next), which is comfortably inside RS(255,223)'s 16-error budget.
+ *
+ * Any character that is neither base32 nor the erasure marker (e.g. a
+ * stray space or newline or the `=` pad introduced by grouping) is
+ * silently dropped, matching `filterToBase32`'s behaviour.
+ */
+export function filterToBase32PreservingErasures(input: string): string {
+  let out = "";
+  for (const ch of input.toUpperCase()) {
+    if (ch === BASE32_ERASURE_MARKER) {
+      out += "A";
+    } else if (DECODE_TABLE[ch] !== undefined) {
+      out += ch;
+    }
+  }
+  return out;
+}

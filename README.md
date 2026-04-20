@@ -117,11 +117,19 @@ Status:
   **AES-128-CTR**, and **DES-56-CBC** (XMP-500 compatibility feel).
 - **Bell 103 FSK modem** (300 baud, full Goertzel demodulator) over
   WebAudio for real over-the-air acoustic coupling between two browsers,
-  with a live-tunable receiver gate exposed in the Modem menu.
+  with a live-tunable receiver gate exposed in the Modem menu. The UART
+  receiver is **bit-clock locked** between bytes, so a single-byte drop
+  on a noisy channel turns into a position-preserving `?` erasure at
+  the exact right spot rather than a stream-wide shift that would
+  cascade into every subsequent codeword.
 - Reed–Solomon FEC on the ciphertext stream, base32 (`A–Z + 2–7`) group
-  framing, `ZZZZ` end-of-message sentinel.
-- 331+ unit tests covering cipher primitives, framing, state machine,
-  UART, and two-station round-trip integration.
+  framing, `ZZZZ` end-of-message sentinel. `?` markers in the Review
+  section are substituted with the zero-bit base32 symbol before RS
+  decoding, letting the decoder absorb them as ordinary substitution
+  errors within its 16-per-codeword budget.
+- 367+ unit tests covering cipher primitives, framing, state machine,
+  UART (clock-lock behaviour under drops), and two-station round-trip
+  integration.
 
 ---
 
